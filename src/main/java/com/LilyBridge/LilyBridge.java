@@ -1,0 +1,370 @@
+package com.LilyBridge;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Monster;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.ServerChatEvent;
+import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import org.java_websocket.WebSocket;
+import org.java_websocket.handshake.ClientHandshake;
+import org.java_websocket.server.WebSocketServer;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.net.InetSocketAddress;
+
+@Mod("lilyminecraftbridge")
+public class LilyBridge {
+
+    public static final String MODID   = "lilyminecraftbridge";
+    public static final Logger LOGGER  = LogManager.getLogger(MODID);
+    private static final Gson   GSON   = new Gson();
+    private static final String BOT_NAME = "Lily";
+
+    private static LilyWebSocketServer wsServer = null;
+    private static MinecraftServer     mcServer = null;
+
+    public LilyBridge(IEventBus modEventBus) {
+        NeoForge.EVENT_BUS.register(this);
+        LOGGER.info("LilyBotBridge loaded!");
+    }
+
+    // ─── Server lifecycle ─────────────────────────────────────────────────────
+
+    @SubscribeEvent
+    public void onServerStarted(ServerStartedEvent event) {
+        mcServer = event.getServer();
+        wsServer = new LilyWebSocketServer(8765);
+        wsServer.start();
+        LOGGER.info("LilyBotBridge WebSocket started on port 8765");
+
+        scheduleCommand(60,  "bot load " + BOT_NAME);
+        scheduleCommand(100, "player " + BOT_NAME + " run /k home");
+    }
+
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
+        runCommand("player " + BOT_NAME + " kill");
+        if (wsServer != null) {
+            try { wsServer.stop(); } catch (Exception e) {
+                LOGGER.error("Error stopping WebSocket: " + e.getMessage());
+            }
+        }
+        mcServer = null;
+    }
+
+    // ─── Game events → Node.js ────────────────────────────────────────────────
+
+    @SubscribeEvent
+    public void onPlayerChat(ServerChatEvent event) {
+        if (event.getPlayer().getName().getString().equals(BOT_NAME)) return;
+        broadcast("chat",
+                "player",  event.getPlayer().getName().getString(),
+                "message", event.getMessage().getString()
+        );
+    }
+
+    @SubscribeEvent
+    public void onPlayerJoin(PlayerEvent.PlayerLoggedInEvent event) {
+        String name = event.getEntity().getName().getString();
+        if (name.equals(BOT_NAME)) return;
+        broadcast("player_join", "player", name);
+    }
+
+    @SubscribeEvent
+    public void onPlayerLeave(PlayerEvent.PlayerLoggedOutEvent event) {
+        String name = event.getEntity().getName().getString();
+        if (name.equals(BOT_NAME)) return;
+        broadcast("player_leave", "player", name);
+    }
+
+    @SubscribeEvent
+    public void onDeath(LivingDeathEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        broadcast("player_death",
+                "player", player.getName().getString(),
+                "cause",  event.getSource().getLocalizedDeathMessage(player).getString()
+        );
+    }
+
+    // ─── Node.js → Game commands ──────────────────────────────────────────────
+
+    public static void handleCommand(JsonObject cmd) {
+        if (mcServer == null) return;
+        String type = cmd.get("type").getAsString();
+
+        switch (type) {
+
+            // ── Chat ──
+            case "chat" -> {
+                String msg = cmd.get("message").getAsString();
+                runCommand("player " + BOT_NAME + " run say " + msg);
+            }
+
+            // ── Run arbitrary command as Lily ──
+            case "run_command" -> {
+                String command = cmd.get("command").getAsString();
+                runCommand("player " + BOT_NAME + " run " + command);
+            }
+
+            // ── Movement ──
+            case "move" -> {
+                String direction = cmd.get("direction").getAsString();
+                // SiliconeDolls move takes a rotation angle not a word
+                // forward=180, back=0, left=270, right=90 (relative to world)
+                // but SiliconeDolls "move <rotation>" uses yaw degrees
+                // so we map direction words to the /player move format
+                String rotArg = switch (direction) {
+                    case "forward" -> "forward";
+                    case "back"    -> "back";
+                    case "left"    -> "left";
+                    case "right"   -> "right";
+                    default        -> direction;
+                };
+                runCommand("player " + BOT_NAME + " move " + rotArg);
+            }
+
+            case "stop" -> runCommand("player " + BOT_NAME + " stop");
+
+            // ── Look ──
+            case "look_at" -> {
+                double x = cmd.get("x").getAsDouble();
+                double y = cmd.get("y").getAsDouble();
+                double z = cmd.get("z").getAsDouble();
+                // format coords without scientific notation
+                runCommand(String.format("player %s look at %.4f %.4f %.4f", BOT_NAME, x, y, z));
+            }
+
+            // ── Attack ──
+            case "attack" -> {
+                String mode = cmd.has("mode") ? cmd.get("mode").getAsString() : "once";
+                // mode: "once", "continue", "stop"
+                if (mode.equals("stop")) {
+                    runCommand("player " + BOT_NAME + " stop");
+                } else {
+                    runCommand("player " + BOT_NAME + " attack " + mode);
+                }
+            }
+
+            // ── Use (right click) ──
+            case "use" -> {
+                String mode = cmd.has("mode") ? cmd.get("mode").getAsString() : "once";
+                runCommand("player " + BOT_NAME + " use " + mode);
+            }
+
+            // ── Jump ──
+            case "jump" -> runCommand("player " + BOT_NAME + " jump once");
+
+            // ── Sneak ──
+            case "sneak" -> {
+                boolean sneaking = cmd.has("value") && cmd.get("value").getAsBoolean();
+                runCommand("player " + BOT_NAME + (sneaking ? " sneak" : " unsneak"));
+            }
+
+            // ── Sprint ──
+            case "sprint" -> {
+                boolean sprinting = cmd.has("value") && cmd.get("value").getAsBoolean();
+                runCommand("player " + BOT_NAME + (sprinting ? " sprint" : " unsprint"));
+            }
+
+            // ── Hotbar slot ──
+            case "hotbar" -> {
+                int slot = cmd.get("slot").getAsInt();
+                runCommand("player " + BOT_NAME + " hotbar " + slot);
+            }
+
+            // ── Spawn / kill ──
+            case "spawn" -> {
+                if (cmd.has("x")) {
+                    double x = cmd.get("x").getAsDouble();
+                    double y = cmd.get("y").getAsDouble();
+                    double z = cmd.get("z").getAsDouble();
+                    runCommand(String.format("player %s spawn at %.2f %.2f %.2f", BOT_NAME, x, y, z));
+                } else {
+                    runCommand("bot load " + BOT_NAME);
+                }
+            }
+
+            case "kill" -> runCommand("player " + BOT_NAME + " kill");
+
+            // ── Query: player list with positions and HP ──
+            case "get_players" -> {
+                if (wsServer == null) return;
+                StringBuilder players = new StringBuilder();
+                for (ServerPlayer p : mcServer.getPlayerList().getPlayers()) {
+                    String name = p.getName().getString();
+                    if (name.equals(BOT_NAME)) continue;
+                    players.append(name)
+                            .append(":").append(p.getX())
+                            .append(",").append(p.getY())
+                            .append(",").append(p.getZ())
+                            .append(",hp=").append(p.getHealth())
+                            .append(";");
+                }
+                JsonObject res = new JsonObject();
+                res.addProperty("type",    "players_list");
+                res.addProperty("players", players.toString());
+                wsServer.broadcast(GSON.toJson(res));
+            }
+
+            // ── Query: Lily's own position and HP ──
+            case "get_lily_state" -> {
+                if (wsServer == null) return;
+                for (ServerPlayer p : mcServer.getPlayerList().getPlayers()) {
+                    if (!p.getName().getString().equals(BOT_NAME)) continue;
+                    JsonObject res = new JsonObject();
+                    res.addProperty("type", "lily_state");
+                    res.addProperty("x",    p.getX());
+                    res.addProperty("y",    p.getY());
+                    res.addProperty("z",    p.getZ());
+                    res.addProperty("hp",   p.getHealth());
+                    res.addProperty("food", p.getFoodData().getFoodLevel());
+                    wsServer.broadcast(GSON.toJson(res));
+                    break;
+                }
+            }
+
+            // ── Query: nearby hostile mobs ──
+            case "get_hostiles" -> {
+                if (wsServer == null) return;
+
+                // find Lily to use as center point
+                ServerPlayer lily = null;
+                for (ServerPlayer p : mcServer.getPlayerList().getPlayers()) {
+                    if (p.getName().getString().equals(BOT_NAME)) { lily = p; break; }
+                }
+                if (lily == null) return;
+
+                ServerLevel level    = (ServerLevel) lily.level();
+                double      scanRange = cmd.has("range") ? cmd.get("range").getAsDouble() : 16.0;
+
+                JsonArray hostiles = new JsonArray();
+                for (Entity entity : level.getEntities(lily, lily.getBoundingBox().inflate(scanRange))) {
+                    if (!(entity instanceof Monster monster)) continue;
+                    if (!monster.isAlive()) continue;
+
+                    JsonObject h = new JsonObject();
+                    h.addProperty("type", monster.getType().toShortString());
+                    h.addProperty("id",   monster.getId());
+                    h.addProperty("x",    monster.getX());
+                    h.addProperty("y",    monster.getY());
+                    h.addProperty("z",    monster.getZ());
+                    h.addProperty("hp",   monster.getHealth());
+                    hostiles.add(h);
+                }
+
+                JsonObject res = new JsonObject();
+                res.addProperty("type", "hostiles");
+                res.add("hostiles", hostiles);
+                wsServer.broadcast(GSON.toJson(res));
+            }
+
+            // ── Query: sidebar scoreboard ──
+            case "get_scoreboard" -> {
+                if (wsServer == null) return;
+                var scoreboard = mcServer.getScoreboard();
+                var objective  = scoreboard.getDisplayObjective(
+                        net.minecraft.world.scores.DisplaySlot.SIDEBAR
+                );
+                JsonObject res = new JsonObject();
+                res.addProperty("type", "scoreboard");
+                if (objective != null) {
+                    res.addProperty("name", objective.getDisplayName().getString());
+                    StringBuilder entries = new StringBuilder();
+                    for (var entry : scoreboard.listPlayerScores(objective)) {
+                        entries.append(entry.owner())
+                                .append(":").append(entry.value())
+                                .append(";");
+                    }
+                    res.addProperty("entries", entries.toString());
+                } else {
+                    res.addProperty("entries", "");
+                }
+                wsServer.broadcast(GSON.toJson(res));
+            }
+        }
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private static void runCommand(String command) {
+        if (mcServer == null) return;
+        mcServer.execute(() ->
+                mcServer.getCommands().performPrefixedCommand(
+                        mcServer.createCommandSourceStack().withMaximumPermission(4),
+                        command
+                )
+        );
+    }
+
+    private static void scheduleCommand(int delayTicks, String command) {
+        if (mcServer == null) return;
+        mcServer.execute(() -> {
+            try { Thread.sleep(delayTicks * 50L); } catch (InterruptedException ignored) {}
+            runCommand(command);
+        });
+    }
+
+    private static void broadcast(String type, String... keyValues) {
+        if (wsServer == null) return;
+        JsonObject msg = new JsonObject();
+        msg.addProperty("type", type);
+        for (int i = 0; i < keyValues.length - 1; i += 2) {
+            msg.addProperty(keyValues[i], keyValues[i + 1]);
+        }
+        wsServer.broadcast(GSON.toJson(msg));
+    }
+
+    // ─── WebSocket server ─────────────────────────────────────────────────────
+
+    static class LilyWebSocketServer extends WebSocketServer {
+
+        public LilyWebSocketServer(int port) {
+            super(new InetSocketAddress(port));
+        }
+
+        @Override
+        public void onOpen(WebSocket conn, ClientHandshake handshake) {
+            LOGGER.info("Node.js connected: " + conn.getRemoteSocketAddress());
+        }
+
+        @Override
+        public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+            LOGGER.info("Node.js disconnected: " + reason);
+        }
+
+        @Override
+        public void onMessage(WebSocket conn, String message) {
+            try {
+                JsonObject cmd = GSON.fromJson(message, JsonObject.class);
+                if (mcServer != null) {
+                    mcServer.execute(() -> handleCommand(cmd));
+                }
+            } catch (Exception e) {
+                LOGGER.error("Command error: " + e.getMessage());
+            }
+        }
+
+        @Override public void onError(WebSocket conn, Exception ex) {
+            LOGGER.error("WS error: " + ex.getMessage());
+        }
+
+        @Override public void onStart() {
+            LOGGER.info("WebSocket ready");
+        }
+    }
+}
