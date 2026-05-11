@@ -5,6 +5,7 @@ import com.LilyBridge.util.AbilityDataLoader;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -150,7 +151,19 @@ public class LilyBridge {
         switch (type) {
             case "chat" -> {
                 String msg = cmd.get("message").getAsString();
-                runCommand("player " + BOT_NAME + " run say " + msg);
+
+                for (ServerPlayer p : mcServer.getPlayerList().getPlayers()) {
+                    if (!p.getName().getString().equals(BOT_NAME)) continue;
+
+                    mcServer.execute(() -> {
+                        mcServer.getPlayerList().broadcastSystemMessage(
+                                Component.literal("<" + p.getName().getString() + "> " + msg),
+                                false
+                        );
+                    });
+
+                    break;
+                }
             }
             case "request_ability_data" -> {
                 AbilityDataLoader.sendAbilityDataToNode();
