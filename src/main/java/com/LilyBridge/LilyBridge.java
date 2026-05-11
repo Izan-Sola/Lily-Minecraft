@@ -1,6 +1,7 @@
 package com.LilyBridge;
 
 import com.LilyBridge.commands.LilyCommands;
+import com.LilyBridge.util.AbilityDataLoader;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -91,6 +92,8 @@ public class LilyBridge {
 
         scheduleCommand(60,  "bot load " + BOT_NAME);
         scheduleCommand(100, "player " + BOT_NAME + " run /k home");
+
+        AbilityDataLoader.loadAll();
     }
 
     @SubscribeEvent
@@ -149,7 +152,9 @@ public class LilyBridge {
                 String msg = cmd.get("message").getAsString();
                 runCommand("player " + BOT_NAME + " run say " + msg);
             }
-
+            case "request_ability_data" -> {
+                AbilityDataLoader.sendAbilityDataToNode();
+            }
             case "run_command" -> {
                 String command = cmd.get("command").getAsString();
                 runCommand("player " + BOT_NAME + " run " + command);
@@ -379,27 +384,78 @@ public class LilyBridge {
                 wsServer.broadcast(GSON.toJson(res));
             }
 
-            case "get_scoreboard" -> {
-                if (wsServer == null) return;
-                var scoreboard = mcServer.getScoreboard();
-                var objective  = scoreboard.getDisplayObjective(
-                        net.minecraft.world.scores.DisplaySlot.SIDEBAR
-                );
-                JsonObject res = new JsonObject();
-                res.addProperty("type", "scoreboard");
-                if (objective != null) {
-                    res.addProperty("name", objective.getDisplayName().getString());
-                    StringBuilder entries = new StringBuilder();
-                    for (var entry : scoreboard.listPlayerScores(objective)) {
-                        entries.append(entry.owner())
-                                .append(":").append(entry.value())
-                                .append(";");
+            case "get_duel_data" -> {
+                Player lily = getLilyBukkit();
+                if (lily == null) return;
+
+                String opponentName = cmd.has("opponent") ? cmd.get("opponent").getAsString() : null;
+                if (opponentName == null) return;
+
+                ServerPlayer opponent = null;
+                for (ServerPlayer p : mcServer.getPlayerList().getPlayers()) {
+                    if (p.getName().getString().equals(opponentName)) {
+                        opponent = p;
+                        break;
                     }
-                    res.addProperty("entries", entries.toString());
-                } else {
-                    res.addProperty("entries", "");
                 }
-                wsServer.broadcast(GSON.toJson(res));
+                if (opponent == null) return;
+
+                JsonObject res = new JsonObject();
+                res.addProperty("type", "duel_data");
+
+                // Lily
+                JsonObject lilyData = new JsonObject();
+                lilyData.addProperty("x", lily.getLocation().getX());
+                lilyData.addProperty("y", lily.getLocation().getY());
+                lilyData.addProperty("z", lily.getLocation().getZ());
+                lilyData.addProperty("hp", lily.getHealth());
+                res.add("lily", lilyData);
+
+                // Opponent
+                JsonObject oppData = new JsonObject();
+                oppData.addProperty("x", opponent.getX());
+                oppData.addProperty("y", opponent.getY());
+                oppData.addProperty("z", opponent.getZ());
+                oppData.addProperty("hp", opponent.getHealth());
+                oppData.addProperty("name", opponentName);
+                res.add("opponent", oppData);
+
+                // Bindings from scoreboard – CORRECT BUKKIT API
+                JsonObject bindings = new JsonObject();
+                org.bukkit.scoreboard.Scoreboard bukkitBoard = lily.getScoreboard();
+                org.bukkit.scoreboard.Objective objective = bukkitBoard.getObjective(org.bukkit.scoreboard.DisplaySlot.SIDEBAR);
+                if (objective != null) {
+                    for (String entry : bukkitBoard.getEntries()) {
+                        org.bukkit.scoreboard.Score score = objective.getScore(entry);
+                        if (score == null || !score.isScoreSet()) continue;
+
+                        int scoreValue = score.getScore(); // -1 through -9
+                        if (scoreValue >= -9 && scoreValue <= -1) {
+                            int slot = -scoreValue;
+
+                            // The actual text is in the team prefix+suffix attached to this entry
+                            org.bukkit.scoreboard.Team team = bukkitBoard.getEntryTeam(entry);
+                            String ability = "";
+                            if (team != null) {
+                                ability = team.getPrefix() + entry + team.getSuffix();
+                                LOGGER.info("[DUEL DEBUG] Team prefix: '" + team.getPrefix() + "' suffix: '" + team.getSuffix() + "'");
+                            } else {
+                                ability = entry;
+                            }
+
+                            // Strip color codes
+                            ability = ability.replaceAll("§[0-9a-fk-orA-FK-OR]", "").trim();
+
+                            if (!ability.isEmpty()) {
+                                bindings.addProperty(String.valueOf(slot), ability);
+                                LOGGER.info("[DUEL] Bound slot " + slot + " -> " + ability);
+                            }
+                        }
+                    }
+                }
+                res.add("bindings", bindings);
+                broadcast(res);
+                LOGGER.info("[DUEL] Sent duel_data with " + bindings.size() + " bindings");
             }
         }
     }
