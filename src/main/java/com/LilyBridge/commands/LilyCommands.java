@@ -1,6 +1,8 @@
 package com.LilyBridge.commands;
 
 import com.LilyBridge.LilyBridge;
+import com.LilyBridge.util.LilyCommandHandler;
+import com.LilyBridge.util.LilyUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.mojang.brigadier.CommandDispatcher;
@@ -36,7 +38,7 @@ public class LilyCommands {
                                                 .executes(ctx -> {
                                                     String ability = StringArgumentType.getString(ctx, "ability");
                                                     int slot = IntegerArgumentType.getInteger(ctx, "slot");
-                                                    LilyBridge.runCommandAsLily("b b " + ability + " " + slot);
+                                                    LilyUtils.runCommandAsLily("b b " + ability + " " + slot);
                                                     ctx.getSource().sendSuccess(
                                                             () -> Component.literal("Bound " + ability + " to slot " + slot + " for " + BOT_NAME), false
                                                     );
@@ -55,7 +57,7 @@ public class LilyCommands {
                                         JsonObject msg = new JsonObject();
                                         msg.addProperty("type", "set_duel_target");
                                         msg.addProperty("target", executor);
-                                        LilyBridge.broadcast(msg);
+                                        LilyUtils.broadcast(msg);
                                     }
                                     ctx.getSource().sendSuccess(
                                             () -> Component.literal("Lily will now duel you (" + executor + "). Use /lily duel stop to end."), false
@@ -69,7 +71,7 @@ public class LilyCommands {
                                                 JsonObject msg = new JsonObject();
                                                 msg.addProperty("type", "set_duel_target");
                                                 msg.addProperty("target", ""); // empty clears duel
-                                                LilyBridge.broadcast(msg);
+                                                LilyUtils.broadcast(msg);
                                             }
                                             ctx.getSource().sendSuccess(
                                                     () -> Component.literal("Duel ended for " + BOT_NAME), false
@@ -82,7 +84,7 @@ public class LilyCommands {
                         // /lily stop (general stop movement, does NOT end duel)
                         .then(Commands.literal("stop")
                                 .executes(ctx -> {
-                                    LilyBridge.runCommand("player " + BOT_NAME + " stop");
+                                    LilyUtils.runCommand("player " + BOT_NAME + " stop");
                                     ctx.getSource().sendSuccess(
                                             () -> Component.literal(BOT_NAME + " stopped moving."), false
                                     );
@@ -99,7 +101,7 @@ public class LilyCommands {
                                                 JsonObject msg = new JsonObject();
                                                 msg.addProperty("type", "set_follow_target");
                                                 msg.addProperty("target", target);
-                                                LilyBridge.broadcast(msg);
+                                                LilyUtils.broadcast(msg);
                                             }
                                             ctx.getSource().sendSuccess(
                                                     () -> Component.literal(BOT_NAME + " will now follow " + target), false
@@ -117,7 +119,7 @@ public class LilyCommands {
                                         JsonObject msg = new JsonObject();
                                         msg.addProperty("type", "set_follow_target");
                                         msg.addProperty("target", caller);
-                                        LilyBridge.broadcast(msg);
+                                        LilyUtils.broadcast(msg);
                                     }
                                     ctx.getSource().sendSuccess(
                                             () -> Component.literal(BOT_NAME + " is coming to you!"), false
@@ -132,7 +134,7 @@ public class LilyCommands {
                                     if (LilyBridge.wsServer != null) {
                                         JsonObject msg = new JsonObject();
                                         msg.addProperty("type", "get_status");
-                                        LilyBridge.broadcast(msg);
+                                        LilyUtils.broadcast(msg);
                                     }
                                     ctx.getSource().sendSuccess(
                                             () -> Component.literal("Requesting " + BOT_NAME + " status..."), false
@@ -166,7 +168,7 @@ public class LilyCommands {
 
             Thread t = new Thread(() -> {
                 try { Thread.sleep(delayMs); } catch (InterruptedException ignored) {}
-                LilyBridge.runCommandAsLily("b b " + ability + " " + slot);
+                LilyUtils.runCommandAsLily("b b " + ability + " " + slot);
             });
             t.setDaemon(true);
             t.start();
@@ -181,7 +183,7 @@ public class LilyCommands {
             JsonObject res = new JsonObject();
             res.addProperty("type",    "element_changed");
             res.addProperty("element", element);
-            LilyBridge.broadcast(res);
+            LilyUtils.broadcast(res);
         }
 
         return 1;

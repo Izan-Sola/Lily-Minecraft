@@ -90,7 +90,7 @@ public class AbilityDataLoader {
             abilitiesJson.add(entry.getKey(), ab);
         }
         msg.add("abilities", abilitiesJson);
-        LilyBridge.broadcast(msg);
+        LilyUtils.broadcast(msg);
         LilyBridge.LOGGER.info("[AbilityData] Sent " + ABILITY_CACHE.size() + " ability stats to Node.js");
     }
 
