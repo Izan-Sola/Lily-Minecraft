@@ -51,8 +51,8 @@ public class LilyBridge {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
-        LilyUtils.runCommand("player " + BOT_NAME + " kill");
-        LilyCommandHandler.stopMovementJumpTask();
+        LilyTasks.stopAllMovement();   // was LilyCommandHandler.stopMovementJumpTask()
+        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
         if (wsServer != null) {
             try { wsServer.stop(); } catch (Exception e) {
                 LOGGER.error("Error stopping WebSocket: " + e.getMessage());

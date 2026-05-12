@@ -15,10 +15,17 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.player.*;
 import org.bukkit.scheduler.BukkitTask;
 
+import static com.LilyBridge.util.LilyTasks.*;
+
 public class LilyCommandHandler {
 
-    private static BukkitTask movementJumpTask = null;
-    private static volatile boolean isMoving = false;
+
+    static volatile boolean isMoving = false;
+    private static volatile String currentMoveDirection = null;
+
+    private static volatile Double targetMoveX = null;
+    private static volatile Double targetMoveZ = null;
+    private static volatile String currentTargetDirection = null;
 
     public static void handleCommand(JsonObject cmd) {
         if (LilyBridge.mcServer == null) return;
@@ -40,24 +47,46 @@ public class LilyCommandHandler {
             }
             case "request_ability_data" -> AbilityDataLoader.sendAbilityDataToNode();
             case "run_command" -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " run " + cmd.get("command").getAsString());
+            case "move_to" -> {
+                double x = cmd.get("x").getAsDouble();
+                double z = cmd.get("z").getAsDouble();
+
+                // Stop any simple direction movement
+                stopMovementJumpTask();
+                stopMovementSafetyTask();
+                currentMoveDirection = null;
+
+                // Set target and start correction
+                targetMoveX = x;
+                targetMoveZ = z;
+                startMovementTargetTask();
+            }
 
             case "move" -> {
                 String direction = cmd.get("direction").getAsString();
                 if (!direction.equals("stop")) {
-                    ServerPlayer lily = LilyUtils.getLilyServerPlayer();
-                    if (lily != null && !LilyUtils.isSafeBlock((ServerLevel) lily.level(), lily.getX(), lily.getY(), lily.getZ(), direction, lily.getLookAngle())) {
-                        LilyBridge.LOGGER.info("[MOVE] Unsafe block ahead, blocking move {}", direction);
-                        return;
-                    }
+
+                    currentMoveDirection = direction;
+                    stopMovementTargetTask();
                     startMovementJumpTask();
+                    startMovementSafetyTask();
                 } else {
+                    stopMovementTargetTask();
                     stopMovementJumpTask();
+                    stopMovementSafetyTask();
+                    currentMoveDirection = null;
                 }
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + direction);
             }
 
             case "stop" -> {
                 stopMovementJumpTask();
+                stopMovementSafetyTask();
+                stopMovementTargetTask();
+                targetMoveX = null;
+                targetMoveZ = null;
+                currentMoveDirection = null;
+                currentTargetDirection = null;
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
                 Player lilyBukkit = LilyUtils.getLilyBukkit();
                 if (lilyBukkit != null && lilyBukkit.isSneaking()) {
@@ -76,6 +105,8 @@ public class LilyCommandHandler {
                 String mode = cmd.has("mode") ? cmd.get("mode").getAsString() : "once";
                 if (mode.equals("stop")) {
                     stopMovementJumpTask();
+                    stopMovementSafetyTask();
+                    currentMoveDirection = null;
                     LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
                     Player lilyBukkit = LilyUtils.getLilyBukkit();
                     if (lilyBukkit != null && lilyBukkit.isSneaking()) {
@@ -110,6 +141,9 @@ public class LilyCommandHandler {
                 boolean sprinting = cmd.has("value") && cmd.get("value").getAsBoolean();
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + (sprinting ? " sprint" : " unsprint"));
             }
+            case "unsprint" -> {
+                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " unsprint");
+            }
             case "hotbar" -> {
                 int slot = cmd.get("slot").getAsInt();
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
@@ -141,67 +175,8 @@ public class LilyCommandHandler {
         }
     }
 
-    // ---------- Jump logic while moving ----------
-    private static void startMovementJumpTask() {
-        if (movementJumpTask != null && !movementJumpTask.isCancelled()) return;
-        isMoving = true;
-        movementJumpTask = Bukkit.getScheduler().runTaskTimer(
-                Bukkit.getPluginManager().getPlugins()[0],
-                () -> {
-                    if (!isMoving) return;
-                    ServerPlayer lily = LilyUtils.getLilyServerPlayer();
-                    if (lily == null) return;
-                    if (!lily.onGround()) return; // already in air, don't interrupt
 
-                    Vec3 look = lily.getLookAngle();
-                    double x = lily.getX();
-                    double y = lily.getY();
-                    double z = lily.getZ();
 
-                    // Check if we need to jump (step up onto a full block or cross a small gap)
-                    if (shouldJump(lily, look, x, y, z)) {
-                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " jump once");
-                    }
-                },
-                0L,
-                20L
-        );
-    }
-
-    public static void stopMovementJumpTask() {
-        isMoving = false;
-        if (movementJumpTask != null) {
-            movementJumpTask.cancel();
-            movementJumpTask = null;
-        }
-    }
-
-    private static boolean shouldJump(ServerPlayer lily, Vec3 look, double x, double y, double z) {
-        // Simple but effective: check block 0.5 blocks ahead at feet level and one block ahead at body level
-        double step = 0.5;
-        double nx = x + look.x * step;
-        double nz = z + look.z * step;
-        double nyFeet = y - 0.1;   // just above feet
-        double nyBody = y + 0.5;   // waist level
-
-        var level = (ServerLevel) lily.level();
-        var blockFeet = level.getBlockState(new net.minecraft.core.BlockPos((int)Math.floor(nx), (int)Math.floor(nyFeet), (int)Math.floor(nz)));
-        var blockBody = level.getBlockState(new net.minecraft.core.BlockPos((int)Math.floor(nx), (int)Math.floor(nyBody), (int)Math.floor(nz)));
-
-        boolean solidFeet = blockFeet.isSolid();
-        boolean solidBody = blockBody.isSolid();
-
-        // Jump if there's a full block at foot level ahead (step up) or if body level is blocked (small obstacle)
-        if (solidFeet && !solidBody) return true;
-
-        // Also check for small gaps: if block at foot level ahead is air, but next block forward is solid
-        double nx2 = x + look.x * 1.2;
-        double nz2 = z + look.z * 1.2;
-        var blockNext = level.getBlockState(new net.minecraft.core.BlockPos((int)Math.floor(nx2), (int)Math.floor(nyFeet), (int)Math.floor(nz2)));
-        if (!solidFeet && blockNext.isSolid()) return true;
-
-        return false;
-    }
 
     // ---------- Helper methods for other commands ----------
     private static void firePkEvent(JsonObject cmd) {
