@@ -50,32 +50,32 @@ public class LilyCommands {
 
                         // /lily duel ... (subcommands)
                         .then(Commands.literal("duel")
-                                // /lily duel  (start duel with command sender)
-                                .executes(ctx -> {
-                                    String executor = ctx.getSource().getTextName();
-                                    if (LilyBridge.wsServer != null) {
-                                        JsonObject msg = new JsonObject();
-                                        msg.addProperty("type", "set_duel_target");
-                                        msg.addProperty("target", executor);
-                                        LilyUtils.broadcast(msg);
-                                    }
-                                    ctx.getSource().sendSuccess(
-                                            () -> Component.literal("Lily will now duel you (" + executor + "). Use /lily duel stop to end."), false
-                                    );
-                                    return 1;
-                                })
-                                // /lily duel stop  (end the duel)
+                                .then(Commands.literal("easy")
+                                        .executes(ctx -> startDuel(ctx.getSource(), "easy"))
+                                )
+                                .then(Commands.literal("medium").executes(ctx -> startDuel(ctx.getSource(), "medium"))
+                                )
+                                .then(Commands.literal("hard")
+                                        .executes(ctx -> startDuel(ctx.getSource(), "hard"))
+                                )
                                 .then(Commands.literal("stop")
                                         .executes(ctx -> {
+
                                             if (LilyBridge.wsServer != null) {
+
                                                 JsonObject msg = new JsonObject();
                                                 msg.addProperty("type", "set_duel_target");
-                                                msg.addProperty("target", ""); // empty clears duel
+                                                msg.addProperty("target", "");
+                                                msg.addProperty("difficulty", "");
+
                                                 LilyUtils.broadcast(msg);
                                             }
+
                                             ctx.getSource().sendSuccess(
-                                                    () -> Component.literal("Duel ended for " + BOT_NAME), false
+                                                    () -> Component.literal("Duel ended for " + BOT_NAME),
+                                                    false
                                             );
+
                                             return 1;
                                         })
                                 )
@@ -185,6 +185,31 @@ public class LilyCommands {
             res.addProperty("element", element);
             LilyUtils.broadcast(res);
         }
+
+        return 1;
+    }
+
+    private static int startDuel(CommandSourceStack source, String difficulty) {
+
+        String executor = source.getTextName();
+
+        if (LilyBridge.wsServer != null) {
+
+            JsonObject msg = new JsonObject();
+
+            msg.addProperty("type", "set_duel_target");
+            msg.addProperty("target", executor);
+            msg.addProperty("difficulty", difficulty);
+
+            LilyUtils.broadcast(msg);
+        }
+
+        source.sendSuccess(
+                () -> Component.literal(
+                        "Lily will duel you on " + difficulty + " difficulty."
+                ),
+                false
+        );
 
         return 1;
     }

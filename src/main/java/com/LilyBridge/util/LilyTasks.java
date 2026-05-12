@@ -217,9 +217,11 @@ public class LilyTasks {
 
                     String newDir;
                     if (Math.abs(dotForward) >= Math.abs(dotRight)) {
-                        newDir = dotForward >= 0 ? "forward" : "back";
+//                        newDir = dotForward >= 0 ? "forward" : "back";
+                         newDir = LilyPathfinder.getBestDirection(lily, currentTargetDirection);
                     } else {
-                        newDir = dotRight >= 0 ? "right" : "left";
+//                        newDir = dotRight >= 0 ? "right" : "left";
+                        newDir = LilyPathfinder.getBestDirection(lily, currentTargetDirection);
                     }
 
                     if (!newDir.equals(currentTargetDirection)) {
