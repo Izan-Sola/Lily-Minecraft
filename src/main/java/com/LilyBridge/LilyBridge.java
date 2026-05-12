@@ -5,12 +5,14 @@ import com.LilyBridge.util.AbilityDataLoader;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
@@ -65,8 +67,53 @@ public class LilyBridge {
         return null;
     }
 
-    // ─── Broadcast helpers ────────────────────────────────────────────────────
+    // ─── helpers ────────────────────────────────────────────────────
+    private static boolean isSafeBlock(ServerLevel level, double x, double y, double z, String direction, Vec3 look) {
+        double nx = x, nz = z;
+        switch (direction) {
+            case "forward" -> { nx = x + look.x; nz = z + look.z; }
+            case "back"    -> { nx = x - look.x; nz = z - look.z; }
+            case "left"    -> { nx = x - look.z; nz = z + look.x; }
+            case "right"   -> { nx = x + look.z; nz = z - look.x; }
+        }
 
+        BlockPos floor = BlockPos.containing(nx, y - 1, nz);
+        BlockPos body  = BlockPos.containing(nx, y,     nz);
+
+        if (level.getBlockState(floor).isAir()) return false;
+        if (!level.getFluidState(floor).isEmpty()) return false;
+        if (!level.getFluidState(body).isEmpty()) return false;
+
+        return true;
+    }
+    private static boolean needJump(ServerPlayer lily, String direction, Vec3 look) {
+        // Calculate the block in front at foot level (y = player's Y)
+        double nx = lily.getX(), nz = lily.getZ();
+        switch (direction) {
+            case "forward" -> { nx += look.x; nz += look.z; }
+            case "back"    -> { nx -= look.x; nz -= look.z; }
+            case "left"    -> { nx -= look.z; nz += look.x; }
+            case "right"   -> { nx += look.z; nz -= look.x; }
+        }
+
+        BlockPos frontFeet = BlockPos.containing(nx, lily.getY(), nz);
+        BlockPos frontHead = frontFeet.above();
+        BlockPos currentFeet = BlockPos.containing(lily.getX(), lily.getY(), lily.getZ());
+        BlockPos currentHead = currentFeet.above();
+
+        ServerLevel level = (ServerLevel) lily.level();
+
+        // Need to jump if front block at feet is solid and the block above front is air,
+        // and the current head block is not solid (so we can jump up)
+        boolean frontSolid = !level.getBlockState(frontFeet).isAir() && !level.getBlockState(frontFeet).getFluidState().isEmpty();
+        boolean frontHeadSolid = !level.getBlockState(frontHead).isAir();
+        boolean canJumpUp = !frontHeadSolid && !frontSolid; // Actually we need front block to be solid? Wait, standard minecraft step: you can walk onto a block that is 1 higher if the block in front at foot level is solid and the block above it is air.
+        // But Carpet won't auto-step; we need to jump onto that block.
+        // So condition: front block is solid, front head is air, and we are at the same Y level (no drop)
+        // Also ensure we are not already in mid-air (on ground)
+        boolean onGround = lily.onGround();
+        return onGround && !level.getBlockState(frontFeet).isAir() && level.getBlockState(frontHead).isAir();
+    }
     public static void broadcast(JsonObject msg) {
         if (wsServer == null) return;
         wsServer.broadcast(GSON.toJson(msg));
@@ -175,6 +222,27 @@ public class LilyBridge {
 
             case "move" -> {
                 String direction = cmd.get("direction").getAsString();
+
+                if (!direction.equals("stop")) {
+                    ServerPlayer lily = null;
+                    for (ServerPlayer p : mcServer.getPlayerList().getPlayers()) {
+                        if (p.getName().getString().equals(BOT_NAME)) { lily = p; break; }
+                    }
+
+                    if (lily != null && !isSafeBlock((ServerLevel) lily.level(), lily.getX(), lily.getY(), lily.getZ(), direction, lily.getLookAngle())) {
+                        LOGGER.info("[MOVE] Unsafe block ahead, blocking move {}", direction);
+                        return;
+                    }
+
+                    // Check if we need to jump to step up a block
+                    if (lily != null && needJump(lily, direction, lily.getLookAngle())) {
+                        LOGGER.info("[MOVE] Jumping to step up");
+                        runCommand("player " + BOT_NAME + " jump once");
+                        // Slight delay to let jump happen before moving? The jump command is immediate and Carpet will move after.
+                        // We'll still send the move command; Carpet will move while jumping.
+                    }
+                }
+
                 runCommand("player " + BOT_NAME + " move " + direction);
             }
 
