@@ -23,8 +23,8 @@ public class LilyBridge {
     public static final Gson    GSON     = new Gson();
     public static final String  BOT_NAME = "Lily";
 
-    public static MinecraftServer mcServer = null;
-    public static LilyWebSocketServer wsServer = null;
+    public static MinecraftServer      mcServer = null;
+    public static LilyWebSocketClient  wsClient = null;
 
     public LilyBridge(IEventBus modEventBus) {
         NeoForge.EVENT_BUS.register(this);
@@ -39,9 +39,15 @@ public class LilyBridge {
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {
         mcServer = event.getServer();
-        wsServer = new LilyWebSocketServer(8765);
-        wsServer.start();
-        LOGGER.info("LilyBotBridge WebSocket started on port 8765");
+
+        // Connect to Node.js WebSocket server
+        try {
+            wsClient = new LilyWebSocketClient();
+            wsClient.connect();
+            LOGGER.info("LilyBotBridge connecting to Node.js WebSocket server...");
+        } catch (Exception e) {
+            LOGGER.error("Failed to create WebSocket client: {}", e.getMessage());
+        }
 
         LilyUtils.scheduleCommand(60,  "bot load " + BOT_NAME);
         LilyUtils.scheduleCommand(100, "player " + BOT_NAME + " run /k home");
@@ -51,13 +57,16 @@ public class LilyBridge {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
-        LilyTasks.stopAllMovement();   // was LilyCommandHandler.stopMovementJumpTask()
+        LilyTasks.stopAllMovement();
         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
-        if (wsServer != null) {
-            try { wsServer.stop(); } catch (Exception e) {
-                LOGGER.error("Error stopping WebSocket: " + e.getMessage());
+
+        if (wsClient != null) {
+            try { wsClient.closeGracefully(); } catch (Exception e) {
+                LOGGER.error("Error closing WebSocket client: {}", e.getMessage());
             }
+            wsClient = null;
         }
+
         mcServer = null;
     }
 }

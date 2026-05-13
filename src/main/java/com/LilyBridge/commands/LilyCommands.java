@@ -61,7 +61,7 @@ public class LilyCommands {
                                 .then(Commands.literal("stop")
                                         .executes(ctx -> {
 
-                                            if (LilyBridge.wsServer != null) {
+                                            if (LilyBridge.wsClient != null) {
 
                                                 JsonObject msg = new JsonObject();
                                                 msg.addProperty("type", "set_duel_target");
@@ -97,7 +97,7 @@ public class LilyCommands {
                                 .then(Commands.argument("player", StringArgumentType.word())
                                         .executes(ctx -> {
                                             String target = StringArgumentType.getString(ctx, "player");
-                                            if (LilyBridge.wsServer != null) {
+                                            if (LilyBridge.wsClient != null) {
                                                 JsonObject msg = new JsonObject();
                                                 msg.addProperty("type", "set_follow_target");
                                                 msg.addProperty("target", target);
@@ -115,7 +115,7 @@ public class LilyCommands {
                         .then(Commands.literal("come")
                                 .executes(ctx -> {
                                     String caller = ctx.getSource().getTextName();
-                                    if (LilyBridge.wsServer != null) {
+                                    if (LilyBridge.wsClient != null) {
                                         JsonObject msg = new JsonObject();
                                         msg.addProperty("type", "set_follow_target");
                                         msg.addProperty("target", caller);
@@ -131,7 +131,7 @@ public class LilyCommands {
                         // /lily status
                         .then(Commands.literal("status")
                                 .executes(ctx -> {
-                                    if (LilyBridge.wsServer != null) {
+                                    if (LilyBridge.wsClient != null) {
                                         JsonObject msg = new JsonObject();
                                         msg.addProperty("type", "get_status");
                                         LilyUtils.broadcast(msg);
@@ -179,7 +179,7 @@ public class LilyCommands {
         );
 
         // Notify Node.js
-        if (LilyBridge.wsServer != null) {
+        if (LilyBridge.wsClient != null) {
             JsonObject res = new JsonObject();
             res.addProperty("type",    "element_changed");
             res.addProperty("element", element);
@@ -193,7 +193,7 @@ public class LilyCommands {
 
         String executor = source.getTextName();
 
-        if (LilyBridge.wsServer != null) {
+        if (LilyBridge.wsClient != null) {
 
             JsonObject msg = new JsonObject();
 

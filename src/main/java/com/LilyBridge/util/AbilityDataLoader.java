@@ -76,7 +76,7 @@ public class AbilityDataLoader {
     }
 
     public static void sendAbilityDataToNode() {
-        if (LilyBridge.wsServer == null) {
+        if (LilyBridge.wsClient == null) {
             LilyBridge.LOGGER.warn("[AbilityData] WebSocket not available");
             return;
         }

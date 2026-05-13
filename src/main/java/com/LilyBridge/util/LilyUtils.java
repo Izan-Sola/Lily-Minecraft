@@ -67,18 +67,20 @@ public class LilyUtils {
     }
 
     public static void broadcast(JsonObject msg) {
-        if (LilyBridge.wsServer == null) return;
-        LilyBridge.wsServer.broadcast(LilyBridge.GSON.toJson(msg));
+        if (LilyBridge.wsClient == null) return;
+  //      LilyBridge.wsServer.broadcast(LilyBridge.GSON.toJson(msg));
+        LilyBridge.wsClient.send(LilyBridge.GSON.toJson(msg));
     }
 
     public static void broadcast(String type, String... keyValues) {
-        if (LilyBridge.wsServer == null) return;
+        if (LilyBridge.wsClient == null) return;
         JsonObject msg = new JsonObject();
         msg.addProperty("type", type);
         for (int i = 0; i < keyValues.length - 1; i += 2) {
             msg.addProperty(keyValues[i], keyValues[i + 1]);
         }
-        LilyBridge.wsServer.broadcast(LilyBridge.GSON.toJson(msg));
+   //     LilyBridge.wsServer.broadcast(LilyBridge.GSON.toJson(msg));
+        LilyBridge.wsClient.send(LilyBridge.GSON.toJson(msg));
     }
 
     public static void runCommand(String command) {
