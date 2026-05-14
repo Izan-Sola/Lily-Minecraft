@@ -61,7 +61,7 @@ public class LilyBridge {
         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
 
         if (wsClient != null) {
-            try { wsClient.closeGracefully(); } catch (Exception e) {
+            try { wsClient.close(); } catch (Exception e) {
                 LOGGER.error("Error closing WebSocket client: {}", e.getMessage());
             }
             wsClient = null;

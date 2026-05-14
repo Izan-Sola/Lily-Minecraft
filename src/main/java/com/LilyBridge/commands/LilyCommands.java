@@ -91,7 +91,25 @@ public class LilyCommands {
                                     return 1;
                                 })
                         )
-
+                        .then(Commands.literal("mode")
+                                .then(Commands.literal("bendcraft")
+                                        .executes(ctx -> {
+                                            JsonObject msg = new JsonObject();
+                                            msg.addProperty("type", "set_mode");
+                                            msg.addProperty("mode", "bendcraft");
+                                            LilyUtils.broadcast(msg);
+                                            ctx.getSource().sendSuccess(() -> net.minecraft.network.chat.Component.literal("[Lily] Mode set to bendcraft"), false);
+                                            return 1;
+                                        }))
+                                .then(Commands.literal("survival")
+                                        .executes(ctx -> {
+                                            JsonObject msg = new JsonObject();
+                                            msg.addProperty("type", "set_mode");
+                                            msg.addProperty("mode", "survival");
+                                            LilyUtils.broadcast(msg);
+                                            ctx.getSource().sendSuccess(() -> net.minecraft.network.chat.Component.literal("[Lily] Mode set to survival"), false);
+                                            return 1;
+                                        })))
                         // /lily follow <player>
                         .then(Commands.literal("follow")
                                 .then(Commands.argument("player", StringArgumentType.word())
@@ -129,19 +147,19 @@ public class LilyCommands {
                         )
 
                         // /lily status
-                        .then(Commands.literal("status")
-                                .executes(ctx -> {
-                                    if (LilyBridge.wsClient != null) {
-                                        JsonObject msg = new JsonObject();
-                                        msg.addProperty("type", "get_status");
-                                        LilyUtils.broadcast(msg);
-                                    }
-                                    ctx.getSource().sendSuccess(
-                                            () -> Component.literal("Requesting " + BOT_NAME + " status..."), false
-                                    );
-                                    return 1;
-                                })
-                        )
+//                        .then(Commands.literal("status")
+//                                .executes(ctx -> {
+//                                    if (LilyBridge.wsClient != null) {
+//                                        JsonObject msg = new JsonObject();
+//                                        msg.addProperty("type", "get_status");
+//                                        LilyUtils.broadcast(msg);
+//                                    }
+//                                    ctx.getSource().sendSuccess(
+//                                            () -> Component.literal("Requesting " + BOT_NAME + " status..."), false
+//                                    );
+//                                    return 1;
+//                                })
+//                        )
         );
     }
 

@@ -244,19 +244,28 @@ public class LilyCommandHandler {
     }
 
     private static void sendLilyState() {
-        if (LilyBridge.wsClient == null) return;
-        for (ServerPlayer p : LilyBridge.mcServer.getPlayerList().getPlayers()) {
-            if (!p.getName().getString().equals(LilyBridge.BOT_NAME)) continue;
-            JsonObject res = new JsonObject();
-            res.addProperty("type", "lily_state");
-            res.addProperty("x",    p.getX());
-            res.addProperty("y",    p.getY());
-            res.addProperty("z",    p.getZ());
-            res.addProperty("hp",   p.getHealth());
-            res.addProperty("food", p.getFoodData().getFoodLevel());
-            LilyUtils.broadcast(res);
-            break;
-        }
+        if (LilyBridge.mcServer == null || LilyBridge.wsClient == null) return;
+
+        ServerPlayer p = LilyBridge.mcServer.getPlayerList().getPlayerByName(LilyBridge.BOT_NAME);
+        if (p == null || p.isDeadOrDying()) return;
+
+        JsonObject res = new JsonObject();
+        res.addProperty("type", "lily_state");
+
+        res.addProperty("x", p.getX());
+        res.addProperty("y", p.getY());
+        res.addProperty("z", p.getZ());
+
+        res.addProperty("hp", p.getHealth());
+        res.addProperty("food", p.getFoodData().getFoodLevel());
+        res.addProperty("armor", p.getArmorValue());
+
+        res.addProperty("onGround", p.onGround());
+        res.addProperty("vx", p.getDeltaMovement().x);
+        res.addProperty("vy", p.getDeltaMovement().y);
+        res.addProperty("vz", p.getDeltaMovement().z);
+
+        LilyUtils.broadcast(res);
     }
 
     private static void sendHostiles(JsonObject cmd) {

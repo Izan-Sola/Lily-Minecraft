@@ -4,31 +4,36 @@ import com.LilyBridge.LilyBridge;
 import com.google.gson.JsonObject;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
-
 import java.net.URI;
 
 public class LilyWebSocketClient extends WebSocketClient {
 
-    private static final String NODE_URL = "wss://monthly-devoted-pug.ngrok-free.app";
-    private volatile boolean intentionallyClosed = false;
+    private static final String[] URLS = {
+            "wss://lilynodeserverpersonal.duckdns.org"
+    };
+    private static int urlIndex = 0;
 
     public LilyWebSocketClient() throws Exception {
-        super(new URI(NODE_URL));
+        super(new URI(URLS[urlIndex]));
+    }
+
+    private LilyWebSocketClient(String url) throws Exception {
+        super(new URI(url));
+    }
+
+    public static LilyWebSocketClient create() {
+        try {
+            return new LilyWebSocketClient(URLS[urlIndex]);
+        } catch (Exception e) {
+            LilyBridge.LOGGER.error("[WS] Failed to create client: {}", e.getMessage());
+            return null;
+        }
     }
 
     @Override
     public void onOpen(ServerHandshake handshake) {
-        LilyBridge.LOGGER.info("[WS] Connected to Node.js at {}", NODE_URL);
-
-        // Identify ourselves to Node so it knows Java is ready
-        JsonObject hello = new JsonObject();
-        hello.addProperty("type", "java_connected");
-        send(LilyBridge.GSON.toJson(hello));
-
-        // Send ability data now that connection is live
-        if (LilyBridge.mcServer != null) {
-            LilyBridge.mcServer.execute(AbilityDataLoader::sendAbilityDataToNode);
-        }
+        LilyBridge.LOGGER.info("[WS] Connected to Node.js via {}", URLS[urlIndex]);
+        urlIndex = 0; // reset to primary on success
     }
 
     @Override
@@ -46,35 +51,25 @@ public class LilyWebSocketClient extends WebSocketClient {
     @Override
     public void onClose(int code, String reason, boolean remote) {
         LilyBridge.LOGGER.info("[WS] Disconnected from Node.js (code={}, reason={}, remote={})", code, reason, remote);
-        if (!intentionallyClosed) {
-            scheduleReconnect();
-        }
+        new Thread(() -> {
+            try {
+                Thread.sleep(5000);
+                LilyBridge.LOGGER.info("[WS] Reconnecting to Node.js...");
+                // cycle to next URL on failure
+                if (code == -1) {
+                    urlIndex = (urlIndex + 1) % URLS.length;
+                    LilyBridge.LOGGER.info("[WS] Trying URL: {}", URLS[urlIndex]);
+                }
+                LilyBridge.wsClient = LilyWebSocketClient.create();
+                if (LilyBridge.wsClient != null) LilyBridge.wsClient.connect();
+            } catch (Exception e) {
+                LilyBridge.LOGGER.error("[WS] Reconnect failed: {}", e.getMessage());
+            }
+        }).start();
     }
 
     @Override
     public void onError(Exception ex) {
         LilyBridge.LOGGER.error("[WS] Error: {}", ex.getMessage());
-    }
-
-    /** Call this before closing the server intentionally so reconnect doesn't fire. */
-    public void closeGracefully() {
-        intentionallyClosed = true;
-        close();
-    }
-
-    private void scheduleReconnect() {
-        Thread t = new Thread(() -> {
-            try {
-                Thread.sleep(5000);
-                if (!intentionallyClosed && LilyBridge.mcServer != null) {
-                    LilyBridge.LOGGER.info("[WS] Reconnecting to Node.js...");
-                    reconnect();
-                }
-            } catch (Exception e) {
-                LilyBridge.LOGGER.error("[WS] Reconnect failed: {}", e.getMessage());
-            }
-        });
-        t.setDaemon(true);
-        t.start();
     }
 }
