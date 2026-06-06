@@ -5,6 +5,7 @@ import com.LilyBridge.util.AbilityDataLoader;
 import com.LilyBridge.util.LilyUtils;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -166,7 +167,38 @@ public class LilyCommandHandler {
             case "get_players"   -> sendPlayersList();
             case "get_lily_state"-> sendLilyState();
             case "get_hostiles"  -> sendHostiles(cmd);
-            case "get_duel_data" -> sendDuelData(cmd);
+            case "get_duel_data" -> {
+                String opponentName = cmd.has("opponent") ? cmd.get("opponent").getAsString() : null;
+                if (opponentName != null) {
+                    LilyBridge.isDuelActive = true;
+                    LilyBridge.currentOpponentName = opponentName;
+
+                    // Instantly force her into survival mode when a duel profile is requested
+                    LilyUtils.runCommand("gamemode survival " + LilyBridge.BOT_NAME);
+                }
+                sendDuelData(cmd);
+            }
+            case "get_source_block" -> {
+                ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+                if (lily == null) return;
+
+                BlockPos src = LilyUtils.findSourceBlock(lily);
+
+                JsonObject res = new JsonObject();
+                res.addProperty("type", "source_block");
+
+                if (src != null) {
+                    res.addProperty("found", true);
+                    // aim at the top-center of the block face
+                    res.addProperty("x", src.getX() + 0.5);
+                    res.addProperty("y", src.getY() + 1.0);
+                    res.addProperty("z", src.getZ() + 0.5);
+                } else {
+                    res.addProperty("found", false);
+                }
+
+                LilyUtils.broadcast(res);
+            }
         }
     }
 
@@ -296,50 +328,64 @@ public class LilyCommandHandler {
     private static void sendDuelData(JsonObject cmd) {
         Player lily = LilyUtils.getLilyBukkit();
         if (lily == null) return;
+
         String opponentName = cmd.has("opponent") ? cmd.get("opponent").getAsString() : null;
         if (opponentName == null) return;
 
         ServerPlayer opponent = null;
         for (ServerPlayer p : LilyBridge.mcServer.getPlayerList().getPlayers()) {
-            if (p.getName().getString().equals(opponentName)) { opponent = p; break; }
+            if (p.getName().getString().equals(opponentName)) {
+                opponent = p;
+                break;
+            }
         }
         if (opponent == null) return;
 
-        JsonObject res      = new JsonObject();
+        JsonObject res = new JsonObject();
+
         JsonObject lilyData = new JsonObject();
-        lilyData.addProperty("x",  lily.getLocation().getX());
-        lilyData.addProperty("y",  lily.getLocation().getY());
-        lilyData.addProperty("z",  lily.getLocation().getZ());
+        lilyData.addProperty("x", lily.getLocation().getX());
+        lilyData.addProperty("y", lily.getLocation().getY());
+        lilyData.addProperty("z", lily.getLocation().getZ());
         lilyData.addProperty("hp", lily.getHealth());
         res.addProperty("type", "duel_data");
         res.add("lily", lilyData);
 
         JsonObject oppData = new JsonObject();
-        oppData.addProperty("x",    opponent.getX());
-        oppData.addProperty("y",    opponent.getY());
-        oppData.addProperty("z",    opponent.getZ());
-        oppData.addProperty("hp",   opponent.getHealth());
+        oppData.addProperty("x", opponent.getX());
+        oppData.addProperty("y", opponent.getY());
+        oppData.addProperty("z", opponent.getZ());
+        oppData.addProperty("hp", opponent.getHealth());
         oppData.addProperty("name", opponentName);
         res.add("opponent", oppData);
+        JsonObject bindings = new JsonObject();
+        org.bukkit.scoreboard.Scoreboard board = lily.getScoreboard();
+        org.bukkit.scoreboard.Objective objective =
+                board.getObjective(org.bukkit.scoreboard.DisplaySlot.SIDEBAR);
 
-        // Include current bindings so DuelingState always has fresh data
-        JsonObject bindings  = new JsonObject();
-        org.bukkit.scoreboard.Scoreboard  board     = lily.getScoreboard();
-        org.bukkit.scoreboard.Objective   objective = board.getObjective(org.bukkit.scoreboard.DisplaySlot.SIDEBAR);
         if (objective != null) {
             for (String entry : board.getEntries()) {
                 org.bukkit.scoreboard.Score score = objective.getScore(entry);
                 if (score == null || !score.isScoreSet()) continue;
+
                 int scoreValue = score.getScore();
                 if (scoreValue >= -9 && scoreValue <= -1) {
                     int slot = -scoreValue;
+
                     org.bukkit.scoreboard.Team team = board.getEntryTeam(entry);
-                    String ability = (team != null) ? team.getPrefix() + entry + team.getSuffix() : entry;
+                    String ability = (team != null)
+                            ? team.getPrefix() + entry + team.getSuffix()
+                            : entry;
+
                     ability = ability.replaceAll("§[0-9a-fk-orA-FK-OR]", "").trim();
-                    if (!ability.isEmpty()) bindings.addProperty(String.valueOf(slot), ability);
+
+                    if (!ability.isEmpty()) {
+                        bindings.addProperty(String.valueOf(slot), ability);
+                    }
                 }
             }
         }
+
         res.add("bindings", bindings);
         LilyUtils.broadcast(res);
     }

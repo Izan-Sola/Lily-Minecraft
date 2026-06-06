@@ -10,25 +10,32 @@ import org.bukkit.scheduler.BukkitTask;
 
 public class LilyTasks {
 
-    // Movement state
-    private static volatile boolean isMoving = false;
-    private static volatile String currentMoveDirection = null;
+    // ---------- Estado de movimiento simple (forward/back/left/right) ----------
+    private static volatile boolean      isMoving            = false;
+    private static volatile String       currentMoveDirection = null;
 
-    // Target‑following state
-    private static volatile Double targetMoveX = null;
-    private static volatile Double targetMoveZ = null;
-    private static volatile String currentTargetDirection = null;
+    // ---------- Estado de seguimiento de objetivo ----------
+    private static volatile Double  targetMoveX          = null;
+    private static volatile Double  targetMoveZ          = null;
+    private static volatile String  currentTargetDirection = null;
 
-    // Task instances
-    private static BukkitTask movementJumpTask = null;
+    // Anti-stuck: guarda la posición hace 3 s y cuenta ticks sin avance
+    private static volatile double  lastStuckX           = 0;
+    private static volatile double  lastStuckZ           = 0;
+    private static volatile int     stuckTicks           = 0;
+    private static final    int     STUCK_THRESHOLD      = 3; // iteraciones del target-task (~3 s)
+
+    // ---------- Tareas Bukkit ----------
+    private static BukkitTask movementJumpTask   = null;
     private static BukkitTask movementSafetyTask = null;
     private static BukkitTask movementTargetTask = null;
 
-    // ---------- Public API for LilyCommandHandler ----------
+    // =========================================================================
+    // API pública
+    // =========================================================================
 
-    /** Start simple directional movement (forward/back/left/right/stop) */
+    /** Movimiento simple (forward/back/left/right/stop). */
     public static void startSimpleMove(String direction) {
-        // Stop any ongoing target following
         stopMovementTargetTask();
         targetMoveX = null;
         targetMoveZ = null;
@@ -45,50 +52,50 @@ public class LilyTasks {
         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + direction);
     }
 
-    /** Start moving toward a specific coordinate (x, z) – Java will recalc direction every second */
+    /** Mueve hacia unas coordenadas mundo (X, Z). */
     public static void startMoveTo(double x, double z) {
-        // Stop any simple movement
         stopMovementJumpTask();
         stopMovementSafetyTask();
-        currentMoveDirection = null;
+        currentMoveDirection   = null;
+        currentTargetDirection = null;
 
         targetMoveX = x;
         targetMoveZ = z;
+        stuckTicks  = 0;
+        lastStuckX  = 0;
+        lastStuckZ  = 0;
+
         startMovementTargetTask();
     }
 
-    /** Stop all movement and cancel all tasks */
+    /** Para todo movimiento y cancela todas las tareas. */
     public static void stopAllMovement() {
         stopMovementJumpTask();
         stopMovementSafetyTask();
         stopMovementTargetTask();
-        targetMoveX = null;
-        targetMoveZ = null;
-        currentMoveDirection = null;
+        targetMoveX            = null;
+        targetMoveZ            = null;
+        currentMoveDirection   = null;
         currentTargetDirection = null;
-        isMoving = false;
+        isMoving               = false;
+        stuckTicks             = 0;
         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
     }
 
-    // ---------- Internal Tasks ----------
+    // =========================================================================
+    // Tarea de salto — cada 10 ticks (0.5 s)
+    // =========================================================================
 
-    /** Jump task – runs every 2 ticks, jumps if needed */
     static void startMovementJumpTask() {
         if (movementJumpTask != null && !movementJumpTask.isCancelled()) return;
-        isMoving = true;
+        isMoving       = true;
         movementJumpTask = Bukkit.getScheduler().runTaskTimer(
                 Bukkit.getPluginManager().getPlugins()[0],
                 () -> {
                     if (!isMoving) return;
                     ServerPlayer lily = LilyUtils.getLilyServerPlayer();
                     if (lily == null || !lily.onGround()) return;
-
-                    Vec3 look = lily.getLookAngle();
-                    double x = lily.getX();
-                    double y = lily.getY();
-                    double z = lily.getZ();
-
-                    if (shouldJump(lily, currentMoveDirection)) {
+                    if (shouldJump(lily)) {
                         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " jump once");
                     }
                 },
@@ -104,7 +111,12 @@ public class LilyTasks {
         }
     }
 
-    /** Safety task – runs every second, reverses direction if unsafe ahead */
+    // =========================================================================
+    // Tarea de seguridad — cada 20 ticks (1 s)
+    //   Solo para movimiento simple; el target-task gestiona su propia seguridad
+    //   a través del pathfinder.
+    // =========================================================================
+
     static void startMovementSafetyTask() {
         if (movementSafetyTask != null && !movementSafetyTask.isCancelled()) return;
         movementSafetyTask = Bukkit.getScheduler().runTaskTimer(
@@ -114,47 +126,32 @@ public class LilyTasks {
                     ServerPlayer lily = LilyUtils.getLilyServerPlayer();
                     if (lily == null) return;
 
-                    Vec3 look = lily.getLookAngle();
-                    double x = lily.getX();
-                    double y = lily.getY();
-                    double z = lily.getZ();
-                    double distance = 2.0;
-                    double nx = x, nz = z;
+                    ServerLevel level = (ServerLevel) lily.level();
+                    Vec3 look  = lily.getLookAngle();
+                    double x   = lily.getX();
+                    double y   = lily.getY();
+                    double z   = lily.getZ();
+
+                    // Vector del paso siguiente según la dirección actual
+                    double nx, nz;
                     switch (currentMoveDirection) {
-                        case "forward" -> { nx = x + look.x * distance; nz = z + look.z * distance; }
-                        case "back"    -> { nx = x - look.x * distance; nz = z - look.z * distance; }
-                        case "left"    -> { nx = x - look.z * distance; nz = z + look.x * distance; }
-                        case "right"   -> { nx = x + look.z * distance; nz = z - look.x * distance; }
-                        default -> { return; }
+                        case "forward" -> { nx = x + look.x; nz = z + look.z; }
+                        case "back"    -> { nx = x - look.x; nz = z - look.z; }
+                        case "left"    -> { nx = x - look.z; nz = z + look.x; }
+                        case "right"   -> { nx = x + look.z; nz = z - look.x; }
+                        default        -> { return; }
                     }
 
-                    var level = (ServerLevel) lily.level();
-                    boolean safe = true;
+                    BlockPos nextFeet = BlockPos.containing(nx, y, nz);
 
-                    // Check for fluids in a 13‑block column
-                    for (int dy = -6; dy <= 6; dy++) {
-                        net.minecraft.core.BlockPos pos = net.minecraft.core.BlockPos.containing(nx, y + dy, nz);
-                        if (!level.getFluidState(pos).isEmpty()) {
-                            safe = false;
-                            break;
-                        }
-                    }
-                    // Check for solid ground within 6 blocks below
-                    if (safe) {
-                        boolean groundFound = false;
-                        for (int dy = 1; dy <= 6; dy++) {
-                            net.minecraft.core.BlockPos pos = net.minecraft.core.BlockPos.containing(nx, y - dy, nz);
-                            if (!level.getBlockState(pos).isAir()) {
-                                groundFound = true;
-                                break;
-                            }
-                        }
-                        if (!groundFound) safe = false;
-                    }
+                    // Comprobación rápida mediante cellType del pathfinder
+                    boolean safe = LilyPathfinder.isSafeStep(level, lily.blockPosition(),
+                            nextFeet.getX() - lily.blockPosition().getX(),
+                            nextFeet.getZ() - lily.blockPosition().getZ());
 
                     if (!safe) {
                         String newDir = oppositeDirection(currentMoveDirection);
-                        LilyBridge.LOGGER.info("[SAFETY] Unsafe ahead, reversing {} -> {}", currentMoveDirection, newDir);
+                        LilyBridge.LOGGER.info("[SAFETY] Peligro al frente, invirtiendo {} -> {}", currentMoveDirection, newDir);
                         currentMoveDirection = newDir;
                         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + newDir);
                     }
@@ -170,71 +167,72 @@ public class LilyTasks {
         }
     }
 
-    /** Target‑following task – runs every second, updates direction to target */
+    // =========================================================================
+    // Tarea de seguimiento de objetivo — cada 20 ticks (1 s)
+    // =========================================================================
+
     static void startMovementTargetTask() {
         if (movementTargetTask != null && !movementTargetTask.isCancelled()) return;
         movementTargetTask = Bukkit.getScheduler().runTaskTimer(
                 Bukkit.getPluginManager().getPlugins()[0],
                 () -> {
                     if (targetMoveX == null || targetMoveZ == null) {
-                        stopMovementTargetTask();
+                        stopAllMovement();
                         return;
                     }
+
                     ServerPlayer lily = LilyUtils.getLilyServerPlayer();
                     if (lily == null) return;
 
-                    double dx = targetMoveX - lily.getX();
-                    double dz = targetMoveZ - lily.getZ();
-                    double dist = Math.hypot(dx, dz);
+                    double distToGoal = Math.hypot(targetMoveX - lily.getX(), targetMoveZ - lily.getZ());
 
-                    if (dist < 1.0) {
-                        // Reached target
-                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move stop");
-                        stopMovementTargetTask();
-                        targetMoveX = null;
-                        targetMoveZ = null;
-                        currentTargetDirection = null;
-                        if (currentMoveDirection == null) {
-                            stopMovementJumpTask();
-                            stopMovementSafetyTask();
-                        }
+                    // ── Llegamos ──────────────────────────────────────────────
+                    if (distToGoal < 1.0) {
+                        LilyBridge.LOGGER.info("[TARGET] Objetivo alcanzado ({}, {})", targetMoveX, targetMoveZ);
+                        stopAllMovement();
                         return;
                     }
 
-                    // Compute relative direction based on current yaw
-                    float yaw = lily.getYRot();
-                    double forwardX = -Math.sin(Math.toRadians(yaw));
-                    double forwardZ =  Math.cos(Math.toRadians(yaw));
-                    double rightX   =  Math.cos(Math.toRadians(yaw));
-                    double rightZ   =  Math.sin(Math.toRadians(yaw));
-
-                    double len = Math.hypot(dx, dz);
-                    double targetX = dx / len;
-                    double targetZ = dz / len;
-
-                    double dotForward = targetX * forwardX + targetZ * forwardZ;
-                    double dotRight   = targetX * rightX   + targetZ * rightZ;
-
-                    String newDir;
-                    if (Math.abs(dotForward) >= Math.abs(dotRight)) {
-//                        newDir = dotForward >= 0 ? "forward" : "back";
-                         newDir = LilyPathfinder.getBestDirection(lily, currentTargetDirection);
+                    // ── Anti-stuck ────────────────────────────────────────────
+                    double movedSinceLastCheck = Math.hypot(lily.getX() - lastStuckX, lily.getZ() - lastStuckZ);
+                    if (movedSinceLastCheck < 0.5) {
+                        stuckTicks++;
                     } else {
-//                        newDir = dotRight >= 0 ? "right" : "left";
-                        newDir = LilyPathfinder.getBestDirection(lily, currentTargetDirection);
+                        stuckTicks = 0;
+                    }
+                    lastStuckX = lily.getX();
+                    lastStuckZ = lily.getZ();
+
+                    if (stuckTicks >= STUCK_THRESHOLD) {
+                        // Forzar salto y continuar; el BFS elegirá otra ruta la próxima iteración
+                        LilyBridge.LOGGER.warn("[STUCK] Sin movimiento {} iteraciones, forzando salto", stuckTicks);
+                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " jump once");
+                        stuckTicks = 0;
+                        // Opcionalmente, invalidar la dirección actual para que el BFS la recalcule
+                        currentTargetDirection = null;
+                    }
+
+                    // ── Pathfinding ───────────────────────────────────────────
+                    String newDir = LilyPathfinder.getBestDirection(lily, targetMoveX, targetMoveZ);
+
+                    if ("stop".equals(newDir)) {
+                        stopAllMovement();
+                        return;
                     }
 
                     if (!newDir.equals(currentTargetDirection)) {
+                        LilyBridge.LOGGER.info("[TARGET] Nueva dirección: {} (dist={:.1f})", newDir, distToGoal);
                         currentTargetDirection = newDir;
-                        currentMoveDirection = newDir;
+                        currentMoveDirection   = newDir;
                         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + newDir);
-
-                        // Ensure jump and safety tasks are active
-                        if (movementJumpTask == null || movementJumpTask.isCancelled())
-                            startMovementJumpTask();
-                        if (movementSafetyTask == null || movementSafetyTask.isCancelled())
-                            startMovementSafetyTask();
                     }
+
+                    // Asegura que jump y safety estén activas
+                    isMoving = true;
+                    if (movementJumpTask == null || movementJumpTask.isCancelled())
+                        startMovementJumpTask();
+                    // Nota: NO arrancamos movementSafetyTask aquí porque el pathfinder
+                    // ya garantiza que el paso elegido es seguro.
                 },
                 0L, 20L
         );
@@ -247,26 +245,37 @@ public class LilyTasks {
         }
     }
 
-    // ---------- Helpers ----------
+    // =========================================================================
+    // Helpers
+    // =========================================================================
 
-    private static boolean shouldJump(ServerPlayer lily, String moveDir) {
-        var level = (ServerLevel) lily.level();
+    /**
+     * Decide si Lily debe saltar: hay algún bloque sólido a la altura de los pies
+     * en los 3×3 bloques delante de ella (filtra los que están detrás según la dirección).
+     */
+    private static boolean shouldJump(ServerPlayer lily) {
+        ServerLevel level  = (ServerLevel) lily.level();
+        BlockPos    center = lily.blockPosition();
 
-        BlockPos center = lily.blockPosition();
-        int y = center.getY();
-
+        Vec3 look = lily.getLookAngle();
+        // Solo comprueba en semicírculo frontal para no saltar hacia atrás
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                BlockPos pos = new BlockPos(center.getX() + dx, y, center.getZ() + dz);
+                if (dx == 0 && dz == 0) continue;
+                // ¿Este bloque está "adelante" (producto escalar positivo)?
+                double dot = dx * look.x + dz * look.z;
+                if (dot <= 0) continue;
 
+                BlockPos pos = center.offset(dx, 0, dz);
                 if (level.getBlockState(pos).isSolid()) {
-                    return true;
+                    // Solo saltar si hay espacio encima (no techos)
+                    if (!level.getBlockState(pos.above()).isSolid()) return true;
                 }
             }
         }
-
         return false;
     }
+
     private static String oppositeDirection(String dir) {
         return switch (dir) {
             case "forward" -> "back";

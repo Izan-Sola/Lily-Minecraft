@@ -163,13 +163,34 @@ public class LilyCommands {
         );
     }
 
-    // Bind preset element (fire only for now)
+
     private static int bindElement(CommandSourceStack source, String element) {
         String[][] bindings = switch (element) {
             case "fire" -> new String[][]{
                     {"1", "FireBall"}, {"2", "FireShots"}, {"3", "Lightning"},
                     {"4", "Discharge"}, {"5", "Combustion"}, {"6", "FireShield"},
                     {"7", "FireBlast"}, {"8", "FireJet"}, {"9", "WallOfFire"},
+            };
+            case "earth" -> new String[][]{
+                    {"1", "EarthSmash"}, {"2", "Shockwave"}, {"3", "Catapult"},
+                    {"4", "EarthWall"}, {"5", "LavaThrow"}, {"6", "LavaDisc"},
+                    {"7", "EarthBlast"}, {"8", "EarthKick"}, {"9", "EarthArmor"},
+            };
+
+            case "air" -> new String[][]{
+                    {"1", "AirBlade"}, {"2", "AirPunch"}, {"3", "AirSwipe"},
+                    {"4", "AirBurst"}, {"5", "AirBreath"}, {"6", "AirShield"},
+                    {"7", "Tornado"}, {"8", "AirBlast"}, {"9", "AirSuction"},
+            };
+            case "water" -> new String[][]{
+                    {"1", "WaterManipulation"}, {"2", "Torrent"}, {"3", "AirSwipe"},
+                    {"4", "IceSpike"}, {"5", "IceWall"}, {"6", "FrostBreath"},
+                    {"7", "Surge"}, {"8", "WaterSpout"}, {"9", "PhaseChange"},
+            };
+            case "chi" -> new String[][]{
+                    {"1", "QuckStrike"}, {"2", "SwiftKick"}, {"3", "SmokeScreen"},
+                    {"4", "DaggerThrow"}, {"5", "BackStab"}, {"6", "RapidPunch"},
+                    {"7", "Paralyze"}, {"8", "HighJump"}, {"9", "NinjaStance"},
             };
             default -> null;
         };

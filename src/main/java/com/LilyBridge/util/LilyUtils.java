@@ -11,8 +11,13 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
 
-public class LilyUtils {
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
+public class LilyUtils {
+    private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor();
     public static Player getLilyBukkit() {
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (p.getName().equals(LilyBridge.BOT_NAME)) return p;
@@ -109,12 +114,13 @@ public class LilyUtils {
 
     public static void scheduleCommand(int delayTicks, String command) {
         if (LilyBridge.mcServer == null) return;
-        LilyBridge.mcServer.execute(() -> {
-            try { Thread.sleep(delayTicks * 50L); } catch (InterruptedException ignored) {}
-            runCommand(command);
-        });
-    }
 
+        long delayMs = delayTicks * 50L;
+
+        SCHEDULER.schedule(() -> {
+            LilyBridge.mcServer.execute(() -> runCommand(command));
+        }, delayMs, TimeUnit.MILLISECONDS);
+    }
     public static void scheduleSneakState(Player player, boolean sneaking) {
         Bukkit.getScheduler().runTask(
                 Bukkit.getPluginManager().getPlugins()[0],
@@ -124,5 +130,57 @@ public class LilyUtils {
                     if (!event.isCancelled()) player.setSneaking(sneaking);
                 }
         );
+    }
+    private static final Set<String> SOURCEABLE_BLOCKS = Set.of(
+            "minecraft:grass_block", "minecraft:sand", "minecraft:dirt",
+            "minecraft:cobblestone", "minecraft:stone", "minecraft:gravel"
+    );
+
+    public static BlockPos findSourceBlock(ServerPlayer lily) {
+        ServerLevel level = (ServerLevel) lily.level();
+        BlockPos feet = lily.blockPosition();
+        Vec3 look = lily.getLookAngle();
+
+        double flatLen = Math.sqrt(look.x * look.x + look.z * look.z);
+        if (flatLen < 1e-4) return null;
+
+        double fx = look.x / flatLen;
+        double fz = look.z / flatLen;
+
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int forward = 1; forward <= 4; forward++) {
+            for (int side = -2; side <= 2; side++) {
+
+                double sx = -fz * side;
+                double sz =  fx * side;
+
+                int bx = (int) Math.floor(feet.getX() + fx * forward + sx);
+                int bz = (int) Math.floor(feet.getZ() + fz * forward + sz);
+
+                // only 1 layer under Lily's feet
+                BlockPos pos = new BlockPos(bx, feet.getY() - 1, bz);
+
+                String id = level.getBlockState(pos).getBlockHolder()
+                        .unwrapKey().map(k -> k.location().toString()).orElse("");
+
+                if (!SOURCEABLE_BLOCKS.contains(id)) continue;
+
+                if (level.getBlockState(pos.above()).isSolid()) continue;
+
+                double dist = feet.distSqr(pos);
+
+                // must be at least 1 block away
+                if (dist < 1.0D) continue;
+
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = pos;
+                }
+            }
+        }
+
+        return best;
     }
 }
