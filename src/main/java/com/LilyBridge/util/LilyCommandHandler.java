@@ -4,6 +4,7 @@ import com.LilyBridge.LilyBridge;
 import com.LilyBridge.util.AbilityDataLoader;
 import com.LilyBridge.util.LilyUtils;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -15,6 +16,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.*;
 import org.bukkit.scheduler.BukkitTask;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.LilyBridge.util.LilyTasks.*;
 
@@ -39,7 +43,6 @@ public class LilyCommandHandler {
 
             case "request_ability_data" -> AbilityDataLoader.sendAbilityDataToNode();
 
-            // Node is asking for current hotbar bindings (called on duel start)
             case "get_bindings" -> sendBindingsToNode();
 
             case "run_command" -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " run " + cmd.get("command").getAsString());
@@ -162,6 +165,46 @@ public class LilyCommandHandler {
                 }
             }
 
+            case "look_dir" -> {
+                ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+                if (lily == null) return;
+
+                String direction = cmd.has("direction") ? cmd.get("direction").getAsString() : "forward";
+                // degrees: how far to rotate from current look (default 90)
+                double degrees   = cmd.has("degrees")   ? cmd.get("degrees").getAsDouble()   : 90.0;
+                double radians   = Math.toRadians(degrees);
+
+                Vec3 look  = lily.getLookAngle();
+                double px  = lily.getX();
+                double py  = lily.getY() + lily.getEyeHeight();
+                double pz  = lily.getZ();
+
+                double flatLen = Math.sqrt(look.x * look.x + look.z * look.z);
+                double fx = flatLen > 1e-4 ? look.x / flatLen : 0;
+                double fz = flatLen > 1e-4 ? look.z / flatLen : 1;
+
+                // Perpendicular right vector (rotate forward 90° CW)
+                double rx = fz, rz = -fx;
+
+                // D is the projection distance — fixed at 10 so the angle is what matters
+                final double D = 10.0;
+
+                double tx, ty, tz;
+                switch (direction) {
+                    case "back"  -> { tx = px - fx * D;                    ty = py;                  tz = pz - fz * D; }
+                    case "left"  -> { tx = px - rx * Math.sin(radians) * D; ty = py;                 tz = pz - rz * Math.sin(radians) * D; }
+                    case "right" -> { tx = px + rx * Math.sin(radians) * D; ty = py;                 tz = pz + rz * Math.sin(radians) * D; }
+                    case "up"    -> { tx = px + fx * D;                    ty = py + Math.tan(radians) * D; tz = pz + fz * D; }
+                    case "down"  -> { tx = px + fx * D;                    ty = py - Math.tan(radians) * D; tz = pz + fz * D; }
+                    default      -> { tx = px + fx * D;                    ty = py;                  tz = pz + fz * D; } // forward
+                }
+
+                LilyUtils.runCommand(String.format("player %s look at %.4f %.4f %.4f",
+                        LilyBridge.BOT_NAME, tx, ty, tz));
+
+                // No explicit release needed — Node's lockLookUntil expiry resumes opponent tracking
+            }
+
             case "kill"          -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
             case "fire_pk_event" -> firePkEvent(cmd);
             case "get_players"   -> sendPlayersList();
@@ -172,24 +215,26 @@ public class LilyCommandHandler {
                 if (opponentName != null) {
                     LilyBridge.isDuelActive = true;
                     LilyBridge.currentOpponentName = opponentName;
-
-                    // Instantly force her into survival mode when a duel profile is requested
                     LilyUtils.runCommand("gamemode survival " + LilyBridge.BOT_NAME);
                 }
                 sendDuelData(cmd);
             }
+
             case "get_source_block" -> {
                 ServerPlayer lily = LilyUtils.getLilyServerPlayer();
                 if (lily == null) return;
 
-                BlockPos src = LilyUtils.findSourceBlock(lily);
+                // Parse optional block filter list sent by Node
+                List<String> allowedBlocks = parseBlockList(cmd);
+                int distance = cmd.has("distance") ? cmd.get("distance").getAsInt() : 0;
+
+                BlockPos src = LilyUtils.findSourceBlock(lily, allowedBlocks.isEmpty() ? null : allowedBlocks, distance);
 
                 JsonObject res = new JsonObject();
                 res.addProperty("type", "source_block");
 
                 if (src != null) {
                     res.addProperty("found", true);
-                    // aim at the top-center of the block face
                     res.addProperty("x", src.getX() + 0.5);
                     res.addProperty("y", src.getY() + 1.0);
                     res.addProperty("z", src.getZ() + 0.5);
@@ -202,13 +247,33 @@ public class LilyCommandHandler {
         }
     }
 
-    // ─── Bindings ──────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // HELPERS
+    // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Reads Lily's current hotbar bindings from the PK scoreboard sidebar and
-     * sends them to Node as a "bindings_update" event.
-     * Called when Node sends "get_bindings" (e.g. on duel start).
+     * Reads the optional "blocks" JSON array from a command object and returns
+     * it as a List<String>.  Each entry is trimmed and lowercased; the
+     * "minecraft:" namespace is added automatically if absent.
+     * Returns an empty list when the field is missing or empty.
      */
+    /**
+     * Reads the optional "blocks" JSON array from a command object.
+     * Values are trimmed and lowercased; alias resolution to full registry IDs
+     * is handled by LilyUtils.findSourceBlock via BLOCK_ALIASES.
+     */
+    private static List<String> parseBlockList(JsonObject cmd) {
+        List<String> result = new ArrayList<>();
+        if (!cmd.has("blocks") || !cmd.get("blocks").isJsonArray()) return result;
+        for (JsonElement el : cmd.getAsJsonArray("blocks")) {
+            String name = el.getAsString().trim().toLowerCase();
+            if (!name.isEmpty()) result.add(name);
+        }
+        return result;
+    }
+
+    // ─── Bindings ──────────────────────────────────────────────────────────────
+
     private static void sendBindingsToNode() {
         Player lily = LilyUtils.getLilyBukkit();
         if (lily == null) return;
@@ -283,15 +348,12 @@ public class LilyCommandHandler {
 
         JsonObject res = new JsonObject();
         res.addProperty("type", "lily_state");
-
         res.addProperty("x", p.getX());
         res.addProperty("y", p.getY());
         res.addProperty("z", p.getZ());
-
         res.addProperty("hp", p.getHealth());
         res.addProperty("food", p.getFoodData().getFoodLevel());
         res.addProperty("armor", p.getArmorValue());
-
         res.addProperty("onGround", p.onGround());
         res.addProperty("vx", p.getDeltaMovement().x);
         res.addProperty("vy", p.getDeltaMovement().y);
@@ -358,6 +420,7 @@ public class LilyCommandHandler {
         oppData.addProperty("hp", opponent.getHealth());
         oppData.addProperty("name", opponentName);
         res.add("opponent", oppData);
+
         JsonObject bindings = new JsonObject();
         org.bukkit.scoreboard.Scoreboard board = lily.getScoreboard();
         org.bukkit.scoreboard.Objective objective =

@@ -50,13 +50,8 @@ public class LilyCommands {
 
                         // /lily duel ... (subcommands)
                         .then(Commands.literal("duel")
-                                .then(Commands.literal("easy")
-                                        .executes(ctx -> startDuel(ctx.getSource(), "easy"))
-                                )
-                                .then(Commands.literal("medium").executes(ctx -> startDuel(ctx.getSource(), "medium"))
-                                )
-                                .then(Commands.literal("hard")
-                                        .executes(ctx -> startDuel(ctx.getSource(), "hard"))
+                                .then(Commands.literal("start")
+                                        .executes(ctx -> startDuel(ctx.getSource(), "medium"))
                                 )
                                 .then(Commands.literal("stop")
                                         .executes(ctx -> {
@@ -172,8 +167,8 @@ public class LilyCommands {
                     {"7", "FireBlast"}, {"8", "FireJet"}, {"9", "WallOfFire"},
             };
             case "earth" -> new String[][]{
-                    {"1", "EarthSmash"}, {"2", "Shockwave"}, {"3", "Catapult"},
-                    {"4", "EarthWall"}, {"5", "LavaThrow"}, {"6", "LavaDisc"},
+                    {"1", "MudSurge"}, {"2", "Shockwave"}, {"3", "Catapult"},
+                    {"4", "RaiseEarth"}, {"5", "LavaThrow"}, {"6", "LavaDisc"},
                     {"7", "EarthBlast"}, {"8", "EarthKick"}, {"9", "EarthArmor"},
             };
 

@@ -11,6 +11,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
 
+import java.util.Collection;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -18,6 +20,31 @@ import java.util.concurrent.TimeUnit;
 
 public class LilyUtils {
     private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor();
+
+    /**
+     * Short alias → full Minecraft registry ID.
+     * Combo authors write e.g. "grass" or "cobble"; this resolves the real name.
+     * Full IDs (containing ":") are passed through unchanged.
+     */
+    private static final java.util.Map<String, String> BLOCK_ALIASES = Map.of(
+            "dirt",       "minecraft:dirt",
+            "grass",      "minecraft:grass_block",
+            "sand",       "minecraft:sand",
+            "stone",      "minecraft:stone",
+            "cobble",     "minecraft:cobblestone",
+            "cobblestone","minecraft:cobblestone",
+            "gravel",     "minecraft:gravel",
+            "water",      "minecraft:water",
+            "lava",       "minecraft:lava",
+            "ice",        "minecraft:ice"
+    );
+
+    /** All blocks recognised as valid sources when no filter is specified. */
+    private static final Set<String> DEFAULT_SOURCE_BLOCKS = Set.of(
+            "minecraft:grass_block", "minecraft:sand", "minecraft:dirt",
+            "minecraft:cobblestone", "minecraft:stone", "minecraft:gravel"
+    );
+
     public static Player getLilyBukkit() {
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (p.getName().equals(LilyBridge.BOT_NAME)) return p;
@@ -32,6 +59,7 @@ public class LilyUtils {
         }
         return null;
     }
+
     private static String oppositeDirection(String dir) {
         return switch (dir) {
             case "forward" -> "back";
@@ -41,6 +69,7 @@ public class LilyUtils {
             default        -> "stop";
         };
     }
+
     public static boolean isSafeBlock(ServerLevel level, double x, double y, double z, String direction, Vec3 look) {
         double nx = x, nz = z;
         switch (direction) {
@@ -50,14 +79,11 @@ public class LilyUtils {
             case "right"   -> { nx = x + look.z; nz = z - look.x; }
         }
 
-        // Check column from 6 blocks below feet to 6 blocks above (total 13 blocks)
         for (int dy = -6; dy <= 6; dy++) {
             BlockPos pos = BlockPos.containing(nx, y + dy, nz);
-            // Any fluid (water, lava, etc.) is unsafe
             if (!level.getFluidState(pos).isEmpty()) return false;
         }
 
-        // Also ensure there is solid ground within 6 blocks below (so we don't walk off a cliff)
         boolean groundFound = false;
         for (int dy = 1; dy <= 6; dy++) {
             BlockPos pos = BlockPos.containing(nx, y - dy, nz);
@@ -66,14 +92,11 @@ public class LilyUtils {
                 break;
             }
         }
-        if (!groundFound) return false;
-
-        return true;
+        return groundFound;
     }
 
     public static void broadcast(JsonObject msg) {
         if (LilyBridge.wsClient == null) return;
-  //      LilyBridge.wsServer.broadcast(LilyBridge.GSON.toJson(msg));
         LilyBridge.wsClient.send(LilyBridge.GSON.toJson(msg));
     }
 
@@ -84,7 +107,6 @@ public class LilyUtils {
         for (int i = 0; i < keyValues.length - 1; i += 2) {
             msg.addProperty(keyValues[i], keyValues[i + 1]);
         }
-   //     LilyBridge.wsServer.broadcast(LilyBridge.GSON.toJson(msg));
         LilyBridge.wsClient.send(LilyBridge.GSON.toJson(msg));
     }
 
@@ -114,13 +136,12 @@ public class LilyUtils {
 
     public static void scheduleCommand(int delayTicks, String command) {
         if (LilyBridge.mcServer == null) return;
-
         long delayMs = delayTicks * 50L;
-
         SCHEDULER.schedule(() -> {
             LilyBridge.mcServer.execute(() -> runCommand(command));
         }, delayMs, TimeUnit.MILLISECONDS);
     }
+
     public static void scheduleSneakState(Player player, boolean sneaking) {
         Bukkit.getScheduler().runTask(
                 Bukkit.getPluginManager().getPlugins()[0],
@@ -131,12 +152,22 @@ public class LilyUtils {
                 }
         );
     }
-    private static final Set<String> SOURCEABLE_BLOCKS = Set.of(
-            "minecraft:grass_block", "minecraft:sand", "minecraft:dirt",
-            "minecraft:cobblestone", "minecraft:stone", "minecraft:gravel"
-    );
 
-    public static BlockPos findSourceBlock(ServerPlayer lily) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // SOURCE BLOCK SEARCH
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Finds the nearest valid source block in front of Lily.
+     *
+     * @param lily          The bot's ServerPlayer instance.
+     * @param allowedBlocks Block IDs to accept (e.g. ["minecraft:water", "minecraft:ice"]).
+     *                      Pass null or an empty collection to use the default set.
+     */
+    /** Default max forward distance when none is specified. */
+    private static final int DEFAULT_SOURCE_DISTANCE = 8;
+
+    public static BlockPos findSourceBlock(ServerPlayer lily, Collection<String> allowedBlocks, int maxDistance) {
         ServerLevel level = (ServerLevel) lily.level();
         BlockPos feet = lily.blockPosition();
         Vec3 look = lily.getLookAngle();
@@ -147,11 +178,34 @@ public class LilyUtils {
         double fx = look.x / flatLen;
         double fz = look.z / flatLen;
 
-        BlockPos best = null;
-        double bestDist = Double.MAX_VALUE;
+        final int scanDist = maxDistance > 0 ? maxDistance : DEFAULT_SOURCE_DISTANCE;
 
-        for (int forward = 1; forward <= 4; forward++) {
-            for (int side = -2; side <= 2; side++) {
+        // Determine which set to match against
+        final Set<String> validBlocks;
+        if (allowedBlocks == null || allowedBlocks.isEmpty()) {
+            validBlocks = DEFAULT_SOURCE_BLOCKS;
+        } else {
+            Set<String> resolved = new java.util.HashSet<>();
+            for (String b : allowedBlocks) {
+                if (b.contains(":")) {
+                    resolved.add(b);
+                } else {
+                    String mapped = BLOCK_ALIASES.get(b);
+                    if (mapped != null) {
+                        resolved.add(mapped);
+                    } else {
+                        LilyBridge.LOGGER.warn("[Source] Unknown block alias '{}' — skipped", b);
+                    }
+                }
+            }
+            validBlocks = resolved;
+        }
+
+        BlockPos best = null;
+        double bestDist = 0;
+
+        for (int forward = 1; forward <= scanDist; forward++) {
+            for (int side = -1; side <= 1; side++) {
 
                 double sx = -fz * side;
                 double sz =  fx * side;
@@ -159,22 +213,18 @@ public class LilyUtils {
                 int bx = (int) Math.floor(feet.getX() + fx * forward + sx);
                 int bz = (int) Math.floor(feet.getZ() + fz * forward + sz);
 
-                // only 1 layer under Lily's feet
                 BlockPos pos = new BlockPos(bx, feet.getY() - 1, bz);
 
                 String id = level.getBlockState(pos).getBlockHolder()
                         .unwrapKey().map(k -> k.location().toString()).orElse("");
 
-                if (!SOURCEABLE_BLOCKS.contains(id)) continue;
+                if (!validBlocks.contains(id)) continue;
 
                 if (level.getBlockState(pos.above()).isSolid()) continue;
 
                 double dist = feet.distSqr(pos);
 
-                // must be at least 1 block away
-                if (dist < 1.0D) continue;
-
-                if (dist < bestDist) {
+                if (dist > bestDist) {
                     bestDist = dist;
                     best = pos;
                 }
@@ -182,5 +232,15 @@ public class LilyUtils {
         }
 
         return best;
+    }
+
+    /** Convenience overload — uses the default block set and default distance. */
+    public static BlockPos findSourceBlock(ServerPlayer lily) {
+        return findSourceBlock(lily, null, 0);
+    }
+
+    /** Convenience overload — uses the default distance. */
+    public static BlockPos findSourceBlock(ServerPlayer lily, Collection<String> allowedBlocks) {
+        return findSourceBlock(lily, allowedBlocks, 0);
     }
 }
