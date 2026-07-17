@@ -62,6 +62,7 @@ public class LilyWebSocketClient extends WebSocketClient {
                 }
                 LilyBridge.wsClient = LilyWebSocketClient.create();
                 if (LilyBridge.wsClient != null) LilyBridge.wsClient.connect();
+                LilyCommandHandler.startEnvironmentScanTask();
             } catch (Exception e) {
                 LilyBridge.LOGGER.error("[WS] Reconnect failed: {}", e.getMessage());
             }

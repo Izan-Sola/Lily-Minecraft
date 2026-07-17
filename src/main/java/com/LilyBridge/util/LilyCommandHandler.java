@@ -20,6 +20,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.LilyBridge.LilyBridge.LOGGER;
 import static com.LilyBridge.util.LilyTasks.*;
 
 public class LilyCommandHandler {
@@ -30,6 +31,31 @@ public class LilyCommandHandler {
     private static volatile Double targetMoveX = null;
     private static volatile Double targetMoveZ = null;
     private static volatile String currentTargetDirection = null;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CONFIG — tune behavior here, nothing else needs to change
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** How long Lily keeps swinging on a "break" command before giving up if the block hasn't broken (safety net for obstructed/wrong-tool cases). */
+    private static final long BREAK_TIMEOUT_TICKS = 100L; // 5 seconds
+
+    /** All tunables for the periodic environment scan. Change values here only. */
+    private static final class EnvScanConfig {
+        /** How often the scan runs. 20 ticks = 1 second. */
+        static final long INTERVAL_TICKS = 100L; // every 3 seconds
+
+        /** Entities: sphere radius in blocks, and max entities reported per scan (nearest-first). */
+        static final double ENTITY_RADIUS = 24.0;
+        static final int    ENTITY_LIMIT  = 10;
+
+        /** Blocks of interest: horizontal radius in blocks (circular scan, not square). */
+        static final int BLOCK_RADIUS = 16;
+        /** Vertical band around Lily: how many blocks above her head / below her feet to include.
+         *  Default (1,1) = 4 blocks tall total: 1 below feet, feet, head, 1 above head. */
+        static final int BLOCK_HEIGHT_ABOVE_HEAD = 2;
+        static final int BLOCK_HEIGHT_BELOW_FEET = 2;
+        static final int BLOCK_LIMIT = 20;
+    }
 
     public static void handleCommand(JsonObject cmd) {
         if (LilyBridge.mcServer == null) return;
@@ -116,6 +142,11 @@ public class LilyCommandHandler {
                 }
             }
 
+            case "break" -> {
+                BlockPos pos = new BlockPos(cmd.get("x").getAsInt(), cmd.get("y").getAsInt(), cmd.get("z").getAsInt());
+                miningManager.mine(pos);
+            }
+
             case "use" -> {
                 String mode = cmd.has("mode") ? cmd.get("mode").getAsString() : "once";
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use " + mode);
@@ -163,6 +194,7 @@ public class LilyCommandHandler {
                 } else {
                     LilyUtils.runCommand("bot load " + LilyBridge.BOT_NAME);
                 }
+                startEnvironmentScanTask();
             }
 
             case "look_dir" -> {
@@ -205,11 +237,27 @@ public class LilyCommandHandler {
                 // No explicit release needed — Node's lockLookUntil expiry resumes opponent tracking
             }
 
-            case "kill"          -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
+            case "kill" -> {
+                stopEnvironmentScanTask();
+                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
+            }
+
             case "fire_pk_event" -> firePkEvent(cmd);
             case "get_players"   -> sendPlayersList();
             case "get_lily_state"-> sendLilyState();
             case "get_hostiles"  -> sendHostiles(cmd);
+
+            // On-demand environment scan (entities + blocks of interest), in addition
+            // to the automatic periodic one started on spawn.
+            case "get_environment_scan" -> performEnvironmentScan();
+
+            // Manual control over the periodic scan, independent of spawn/kill —
+            // e.g. {"type":"toggle_env_scan","value":false} to pause it mid-session.
+            case "toggle_env_scan" -> {
+                boolean enable = cmd.has("value") && cmd.get("value").getAsBoolean();
+                if (enable) startEnvironmentScanTask(); else stopEnvironmentScanTask();
+            }
+
             case "get_duel_data" -> {
                 String opponentName = cmd.has("opponent") ? cmd.get("opponent").getAsString() : null;
                 if (opponentName != null) {
@@ -248,15 +296,79 @@ public class LilyCommandHandler {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // ENVIRONMENT AWARENESS SCAN (entities + blocks of interest)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static volatile BukkitTask envScanTask = null;
+
+    /**
+     * Starts the periodic environment scan (entities + blocks of interest).
+     * Safe to call repeatedly — a second call while already running is a no-op,
+     * so hooking this into "spawn" every time is fine.
+     */
+    public static void startEnvironmentScanTask() {
+
+        if (envScanTask != null) return;
+        envScanTask = Bukkit.getScheduler().runTaskTimer(
+                Bukkit.getPluginManager().getPlugins()[0],
+                LilyCommandHandler::performEnvironmentScan,
+                0L,
+                EnvScanConfig.INTERVAL_TICKS
+        );
+        LOGGER.info("SCANNING ENVIRONMENT FOR LILY");
+    }
+
+    /** Stops the periodic environment scan, if one is running. Safe to call when already stopped. */
+    public static void stopEnvironmentScanTask() {
+        if (envScanTask == null) return;
+        envScanTask.cancel();
+        envScanTask = null;
+    }
+
+    /**
+     * Runs one scan pass and broadcasts the result to Node as a single
+     * "environment_scan" message containing both nearby entities and nearby
+     * blocks of interest, each independently capped so a busy area never
+     * bloats the payload (and downstream, the LLM prompt).
+     */
+    private static void performEnvironmentScan() {
+        ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+        if (lily == null) return;
+
+        JsonArray entities = LilyUtils.scanNearbyEntities(
+                lily, EnvScanConfig.ENTITY_RADIUS, EnvScanConfig.ENTITY_LIMIT);
+
+        JsonArray blocks = LilyUtils.scanNearbyBlocksOfInterest(
+                lily,
+                EnvScanConfig.BLOCK_RADIUS,
+                EnvScanConfig.BLOCK_HEIGHT_ABOVE_HEAD,
+                EnvScanConfig.BLOCK_HEIGHT_BELOW_FEET,
+                EnvScanConfig.BLOCK_LIMIT
+        );
+
+        JsonArray hostiles = new JsonArray();
+        JsonArray passives = new JsonArray();
+        for (JsonElement el : entities) {
+            JsonObject o = el.getAsJsonObject();
+            if (o.has("name")) continue;
+            if (o.has("hostile") && o.get("hostile").getAsBoolean()) hostiles.add(o);
+            else passives.add(o);
+        }
+
+        JsonObject hotbar = LilyUtils.scanHotbar(lily); // NEW
+
+        JsonObject res = new JsonObject();
+        res.addProperty("type", "environment_scan");
+        res.add("hostiles", hostiles);
+        res.add("passives", passives);
+        res.add("blocks_of_interest", blocks);
+        res.add("hotbar", hotbar); // NEW
+        LilyUtils.broadcast(res);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
     // HELPERS
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Reads the optional "blocks" JSON array from a command object and returns
-     * it as a List<String>.  Each entry is trimmed and lowercased; the
-     * "minecraft:" namespace is added automatically if absent.
-     * Returns an empty list when the field is missing or empty.
-     */
     /**
      * Reads the optional "blocks" JSON array from a command object.
      * Values are trimmed and lowercased; alias resolution to full registry IDs
@@ -301,7 +413,7 @@ public class LilyCommandHandler {
         res.addProperty("type", "bindings_update");
         res.add("bindings", bindings);
         LilyUtils.broadcast(res);
-        LilyBridge.LOGGER.info("[Bindings] Sent {} bindings to Node", bindings.size());
+        LOGGER.info("[Bindings] Sent {} bindings to Node", bindings.size());
     }
 
     // ─── Helper methods ────────────────────────────────────────────────────────
@@ -321,7 +433,7 @@ public class LilyCommandHandler {
                 Bukkit.getPluginManager().callEvent(heldEvent);
                 if (!heldEvent.isCancelled()) lily.getInventory().setHeldItemSlot(newSlot);
             }
-            default -> LilyBridge.LOGGER.warn("[PK] Unknown pk event: {}", pkEvent);
+            default -> LOGGER.warn("[PK] Unknown pk event: {}", pkEvent);
         }
     }
 

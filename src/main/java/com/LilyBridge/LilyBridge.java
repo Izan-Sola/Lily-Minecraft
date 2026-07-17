@@ -17,6 +17,7 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.ServerChatEvent;  // ← Evento de chat de NeoForge
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import com.LilyBridge.util.*;
@@ -58,7 +59,11 @@ public class LilyBridge {
                 "message", message
         );
     }
-
+    @SubscribeEvent
+    public void onServerTick(ServerTickEvent.Post event) {
+        ServerPlayer lily = LilyUtils.getLilyServerPlayer(); // your accessor for the underlying entity
+        if (lily != null) miningManager.tick(lily);
+    }
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {
         mcServer = event.getServer();

@@ -1,17 +1,27 @@
 package com.LilyBridge.util;
 
 import com.LilyBridge.LilyBridge;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -44,6 +54,50 @@ public class LilyUtils {
             "minecraft:grass_block", "minecraft:sand", "minecraft:dirt",
             "minecraft:cobblestone", "minecraft:stone", "minecraft:gravel"
     );
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // BLOCKS OF INTEREST — full registry ID → friendly category.
+    // Add/remove entries here to change what the environment scan reports;
+    // nothing else needs to change.
+    // ─────────────────────────────────────────────────────────────────────────
+    private static final Map<String, String> BLOCKS_OF_INTEREST = buildBlocksOfInterest();
+
+    private static Map<String, String> buildBlocksOfInterest() {
+        Map<String, String> m = new HashMap<>();
+
+        // Wood (logs/stems)
+        for (String log : new String[]{
+                "oak_log", "birch_log", "spruce_log", "jungle_log", "acacia_log",
+                "dark_oak_log", "mangrove_log", "cherry_log", "crimson_stem", "warped_stem"
+        }) {
+            m.put("minecraft:" + log, "wood");
+        }
+
+        // Ores (overworld + deepslate variants)
+        for (String ore : new String[]{
+                "coal_ore", "deepslate_coal_ore",
+                "iron_ore", "deepslate_iron_ore",
+                "copper_ore", "deepslate_copper_ore",
+                "gold_ore", "deepslate_gold_ore",
+                "redstone_ore", "deepslate_redstone_ore",
+                "lapis_ore", "deepslate_lapis_ore",
+                "diamond_ore", "deepslate_diamond_ore",
+                "emerald_ore", "deepslate_emerald_ore",
+                "ancient_debris"
+        }) {
+            m.put("minecraft:" + ore, "ore");
+        }
+
+        // Food sources
+        m.put("minecraft:sweet_berry_bush", "food");
+        m.put("minecraft:melon",            "food");
+        m.put("minecraft:pumpkin",          "food");
+        m.put("minecraft:wheat",            "food");
+        m.put("minecraft:carrots",          "food");
+        m.put("minecraft:potatoes",         "food");
+
+        return m;
+    }
 
     public static Player getLilyBukkit() {
         for (Player p : Bukkit.getOnlinePlayers()) {
@@ -151,6 +205,115 @@ public class LilyUtils {
                     if (!event.isCancelled()) player.setSneaking(sneaking);
                 }
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ENVIRONMENT AWARENESS — entity scan + blocks-of-interest scan.
+    // Both are capped and sorted nearest-first so a busy area never floods
+    // the result (or, downstream, the LLM prompt) regardless of how much is
+    // actually around.
+    // ─────────────────────────────────────────────────────────────────────────
+    public static JsonObject scanHotbar(ServerPlayer lily) {
+        JsonObject hotbar = new JsonObject();
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = lily.getInventory().getItem(slot);
+            if (stack.isEmpty()) {
+                hotbar.addProperty(String.valueOf(slot + 1), "empty");
+            } else {
+                String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+                String display = stack.getCount() > 1 ? id + " x" + stack.getCount() : id;
+                hotbar.addProperty(String.valueOf(slot + 1), display);
+            }
+        }
+        return hotbar;
+    }
+    /**
+     * Returns up to {@code limit} entities (any type — players, mobs, items,
+     * etc.) within {@code radius} blocks of Lily, nearest first. Lily herself
+     * is excluded.
+     */
+    public static JsonArray scanNearbyEntities(ServerPlayer lily, double radius, int limit) {
+        ServerLevel level = (ServerLevel) lily.level();
+
+        List<Entity> found = new ArrayList<>(level.getEntities(lily, lily.getBoundingBox().inflate(radius)));
+        found.sort(Comparator.comparingDouble(e -> e.distanceToSqr(lily)));
+
+        JsonArray arr = new JsonArray();
+        int count = 0;
+        for (Entity e : found) {
+            if (count >= limit) break;
+
+            JsonObject o = new JsonObject();
+            o.addProperty("type", e.getType().toShortString());
+            o.addProperty("id", e.getId());
+            o.addProperty("x", e.getX());
+            o.addProperty("y", e.getY());
+            o.addProperty("z", e.getZ());
+
+            if (e instanceof LivingEntity living) {
+                o.addProperty("hp", living.getHealth());
+            }
+            if (e instanceof ServerPlayer sp) {
+                o.addProperty("name", sp.getName().getString());
+            }
+            if (e instanceof Monster) {           // NEW
+                o.addProperty("hostile", true);  // NEW
+            }
+
+            arr.add(o);
+            count++;
+        }
+        return arr;
+    }
+
+    /**
+     * Scans a circular area around Lily (radius in blocks, horizontal) within
+     * a vertical band relative to her position — heightBelowFeet blocks below
+     * her feet up through heightAboveHead blocks above her head — for any
+     * block registered in {@link #BLOCKS_OF_INTEREST}. Returns up to
+     * {@code limit} hits, nearest first.
+     */
+    public static JsonArray scanNearbyBlocksOfInterest(
+            ServerPlayer lily, int radius, int heightAboveHead, int heightBelowFeet, int limit) {
+
+        ServerLevel level = (ServerLevel) lily.level();
+        BlockPos feet = lily.blockPosition();
+
+        int minY = feet.getY() - heightBelowFeet;
+        int maxY = feet.getY() + 1 + heightAboveHead; // +1 accounts for the head block
+
+        List<JsonObject> hits = new ArrayList<>();
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if (dx * dx + dz * dz > radius * radius) continue; // circular scan, not square
+
+                for (int y = minY; y <= maxY; y++) {
+                    BlockPos pos = new BlockPos(feet.getX() + dx, y, feet.getZ() + dz);
+
+                    String id = level.getBlockState(pos).getBlockHolder()
+                            .unwrapKey().map(k -> k.location().toString()).orElse("");
+
+                    String category = BLOCKS_OF_INTEREST.get(id);
+                    if (category == null) continue;
+
+                    JsonObject o = new JsonObject();
+                    o.addProperty("block", id.replace("minecraft:", ""));
+                    o.addProperty("category", category);
+                    o.addProperty("x", pos.getX());
+                    o.addProperty("y", pos.getY());
+                    o.addProperty("z", pos.getZ());
+                    hits.add(o);
+                }
+            }
+        }
+
+        hits.sort(Comparator.comparingDouble(o -> feet.distSqr(
+                new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()))));
+
+        JsonArray arr = new JsonArray();
+        for (int i = 0; i < Math.min(limit, hits.size()); i++) arr.add(hits.get(i));
+        return arr;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
