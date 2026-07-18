@@ -10,6 +10,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 import org.bukkit.Bukkit;
@@ -241,6 +242,7 @@ public class LilyUtils {
         JsonArray arr = new JsonArray();
         int count = 0;
         for (Entity e : found) {
+            if (!(e instanceof LivingEntity)) continue;
             if (count >= limit) break;
 
             JsonObject o = new JsonObject();
@@ -250,14 +252,11 @@ public class LilyUtils {
             o.addProperty("y", e.getY());
             o.addProperty("z", e.getZ());
 
-            if (e instanceof LivingEntity living) {
-                o.addProperty("hp", living.getHealth());
-            }
             if (e instanceof ServerPlayer sp) {
                 o.addProperty("name", sp.getName().getString());
             }
-            if (e instanceof Monster) {           // NEW
-                o.addProperty("hostile", true);  // NEW
+            if (e instanceof Enemy) {
+                o.addProperty("hostile", true);
             }
 
             arr.add(o);

@@ -134,10 +134,38 @@ public class LilyCommandHandler {
                         LilyUtils.scheduleSneakState(lilyBukkit, false);
                     }
                 } else {
-                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " attack " + mode);
-                    Player lilyBukkit = LilyUtils.getLilyBukkit();
-                    if (lilyBukkit != null) {
-                        Bukkit.getPluginManager().callEvent(new PlayerAnimationEvent(lilyBukkit, PlayerAnimationType.ARM_SWING));
+                    // If slot specified, swap to it first
+                    if (cmd.has("slot")) {
+                        int slot = cmd.get("slot").getAsInt();
+                        // Swap to the slot
+                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
+                        // Fire held event
+                        Player lilyBukkit = LilyUtils.getLilyBukkit();
+                        if (lilyBukkit != null) {
+                            int newSlot = slot - 1;
+                            int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
+                            PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
+                            Bukkit.getPluginManager().callEvent(heldEvent);
+                            if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
+                        }
+                        // Attack after a small delay
+                        Bukkit.getScheduler().runTaskLater(
+                                Bukkit.getPluginManager().getPlugins()[0],
+                                () -> {
+                                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " attack " + mode);
+                                    Player lilyBukkit2 = LilyUtils.getLilyBukkit();
+                                    if (lilyBukkit2 != null) {
+                                        Bukkit.getPluginManager().callEvent(new PlayerAnimationEvent(lilyBukkit2, PlayerAnimationType.ARM_SWING));
+                                    }
+                                },
+                                2L
+                        );
+                    } else {
+                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " attack " + mode);
+                        Player lilyBukkit = LilyUtils.getLilyBukkit();
+                        if (lilyBukkit != null) {
+                            Bukkit.getPluginManager().callEvent(new PlayerAnimationEvent(lilyBukkit, PlayerAnimationType.ARM_SWING));
+                        }
                     }
                 }
             }
@@ -148,12 +176,58 @@ public class LilyCommandHandler {
             }
 
             case "use" -> {
-                String mode = cmd.has("mode") ? cmd.get("mode").getAsString() : "once";
-                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use " + mode);
+                // If slot specified, swap to it first
+                if (cmd.has("slot")) {
+                    int slot = cmd.get("slot").getAsInt();
+                    // Swap to the slot
+                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
+                    // Fire held event
+                    Player lilyBukkit = LilyUtils.getLilyBukkit();
+                    if (lilyBukkit != null) {
+                        int newSlot = slot - 1;
+                        int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
+                        PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
+                        Bukkit.getPluginManager().callEvent(heldEvent);
+                        if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
+                    }
+                    // Use after a small delay (2 ticks = 0.1s)
+                    Bukkit.getScheduler().runTaskLater(
+                            Bukkit.getPluginManager().getPlugins()[0],
+                            () -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use once"),
+                            2L
+                    );
+                } else {
+                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use once");
+                    Player lilyBukkit = LilyUtils.getLilyBukkit();
+                    if (lilyBukkit != null) {
+                        Bukkit.getPluginManager().callEvent(new PlayerAnimationEvent(lilyBukkit, PlayerAnimationType.ARM_SWING));
+                    }
+                }
+            }
+
+            case "drop" -> {
+                int slot = cmd.get("slot").getAsInt();
+                if (slot < 1 || slot > 9) {
+                    LOGGER.warn("[DROP] Invalid slot: {}", slot);
+                    return;
+                }
+                // First switch to the slot, then drop
+                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
+                // Fire held event for the swap
                 Player lilyBukkit = LilyUtils.getLilyBukkit();
                 if (lilyBukkit != null) {
-                    Bukkit.getPluginManager().callEvent(new PlayerAnimationEvent(lilyBukkit, PlayerAnimationType.ARM_SWING));
+                    int newSlot = slot - 1;
+                    int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
+                    PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
+                    Bukkit.getPluginManager().callEvent(heldEvent);
+                    if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
                 }
+                // Drop after a small delay
+                Bukkit.getScheduler().runTaskLater(
+                        Bukkit.getPluginManager().getPlugins()[0],
+                        () -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " drop once"),
+                        2L
+                );
             }
 
             case "jump"    -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " jump once");
@@ -349,7 +423,9 @@ public class LilyCommandHandler {
         JsonArray hostiles = new JsonArray();
         JsonArray passives = new JsonArray();
         for (JsonElement el : entities) {
+
             JsonObject o = el.getAsJsonObject();
+
             if (o.has("name")) continue;
             if (o.has("hostile") && o.get("hostile").getAsBoolean()) hostiles.add(o);
             else passives.add(o);
