@@ -9,7 +9,7 @@ import java.net.URI;
 public class LilyWebSocketClient extends WebSocketClient {
 
     private static final String[] URLS = {
-            "wss://lilynodeserverpersonal.duckdns.org"
+            "nuhuh"
     };
     private static int urlIndex = 0;
 
