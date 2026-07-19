@@ -62,7 +62,7 @@ public class LilyBridge {
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
         ServerPlayer lily = LilyUtils.getLilyServerPlayer(); // your accessor for the underlying entity
-        if (lily != null) miningManager.tick(lily);
+        if (lily != null) MiningManager.tick(lily);
     }
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {

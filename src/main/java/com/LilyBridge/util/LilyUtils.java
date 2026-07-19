@@ -17,7 +17,17 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.item.AxeItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.PickaxeItem;
+import net.minecraft.world.item.ShovelItem;
+import net.minecraft.world.item.Tier;
+import net.minecraft.world.item.Tiers;
+import net.minecraft.world.item.TieredItem;
+import net.minecraft.world.level.block.state.BlockState;
+import org.bukkit.entity.Player;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -28,6 +38,8 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+
+import static com.LilyBridge.LilyBridge.LOGGER;
 
 public class LilyUtils {
     private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor();
@@ -358,7 +370,7 @@ public class LilyUtils {
                     if (mapped != null) {
                         resolved.add(mapped);
                     } else {
-                        LilyBridge.LOGGER.warn("[Source] Unknown block alias '{}' — skipped", b);
+                        LOGGER.warn("[Source] Unknown block alias '{}' — skipped", b);
                     }
                 }
             }
@@ -406,5 +418,137 @@ public class LilyUtils {
     /** Convenience overload — uses the default distance. */
     public static BlockPos findSourceBlock(ServerPlayer lily, Collection<String> allowedBlocks) {
         return findSourceBlock(lily, allowedBlocks, 0);
+    }
+
+    // ─── Tool selection ─────────────────────────────────────────────────────────────
+
+    /**
+     * Ranks a {@link Tier} by mining quality. NeoForge 1.21.1 removed
+     * {@code Tier#getLevel()} (Mojang dropped the numeric "harvest level"
+     * system in favor of tag-based tool requirements), so there's no single
+     * built-in ordinal anymore.
+     *
+     * Vanilla tiers get an explicit rank via identity comparison against
+     * {@link Tiers}. Any other tier (modded tools) falls back to a rank
+     * derived from {@link Tier#getSpeed()}, scaled down so it always sorts
+     * below WOOD unless it's a genuinely fast modded tool — keeps custom
+     * tiers comparable without needing to know about every modpack's tools.
+     */
+    private static int toolRank(Tier tier) {
+        if (tier == Tiers.NETHERITE) return 5;
+        if (tier == Tiers.DIAMOND)   return 4;
+        if (tier == Tiers.IRON)      return 3;
+        if (tier == Tiers.STONE)     return 2;
+        if (tier == Tiers.WOOD)      return 1;
+        if (tier == Tiers.GOLD)      return 1; // fast but fragile — treat as low tier
+
+        // Unknown/modded tier: approximate a rank from mining speed so it
+        // still slots in somewhere sensible relative to the vanilla tiers.
+        return (int) Math.floor(tier.getSpeed() / 2.0);
+    }
+
+    /**
+     * Picks the best tool in Lily's whole inventory for the given block and switches to
+     * it (via switchToSlot) if one is found. "Best" means highest tool rank among
+     * matching tools (see {@link #toolRank(Tier)}) — enchantments aren't considered.
+     *
+     * Blocks tagged as needing a pickaxe/axe/shovel are matched to that tool type via
+     * BlockTags; that also naturally covers "dirt/sand can be hand-mined but use a
+     * shovel if she has one" without a special case, since dirt/sand are themselves
+     * tagged MINEABLE_WITH_SHOVEL — shovel is preferred if owned, otherwise this method
+     * finds no match and does nothing, leaving her mining bare-handed. Blocks that need
+     * no specific tool at all are also left alone.
+     */
+    public static void equipBestToolFor(BlockPos pos) {
+        ServerPlayer lily = getLilyServerPlayer();
+        if (lily == null) return;
+
+        BlockState state = lily.level().getBlockState(pos);
+        Class<? extends Item> requiredType = requiredToolType(state);
+        if (requiredType == null) return; // no specific tool needed for this block
+
+        int bestSlot  = -1;
+        int bestRank  = Integer.MIN_VALUE;
+
+        for (int slot = 0; slot < 36; slot++) {
+            ItemStack stack = lily.getInventory().getItem(slot);
+            if (stack.isEmpty()) continue;
+
+            Item item = stack.getItem();
+            if (!requiredType.isInstance(item)) continue;
+
+            int rank = (item instanceof TieredItem tiered) ? toolRank(tiered.getTier()) : 0;
+            if (rank > bestRank) {
+                bestRank = rank;
+                bestSlot = slot;
+            }
+        }
+
+        if (bestSlot == -1) return; // doesn't own a matching tool — mine with whatever's held
+
+        switchToSlot(bestSlot + 1); // +1: inventory here is 0-based, switchToSlot is 1-based
+    }
+
+    private static Class<? extends Item> requiredToolType(BlockState state) {
+        if (state.is(BlockTags.MINEABLE_WITH_PICKAXE)) return PickaxeItem.class;
+        if (state.is(BlockTags.MINEABLE_WITH_AXE))     return AxeItem.class;
+        if (state.is(BlockTags.MINEABLE_WITH_SHOVEL))  return ShovelItem.class;
+        return null;
+    }
+
+// ─── Inventory slot handling ────────────────────────────────────────────────
+// (Relocated from LilyCommandHandler — this is where slot-swap consumers other
+//  than command handling, like equipBestToolFor above, can reach it too.)
+
+    /**
+     * Switches Lily's held hotbar slot to whatever item lives at `slot` — a 1-based
+     * index across her whole inventory (1-9 = hotbar, 10-36 = main inventory, i.e.
+     * Bukkit's PlayerInventory indices 0-35 offset by one to match the existing
+     * "hotbar 1-9" convention). If the item isn't already in the hotbar, it's swapped
+     * into hotbar slot 1 first — displacing whatever was there into the now-vacated
+     * inventory slot — and Lily switches to slot 1 instead.
+     */
+    public static void switchToSlot(int slot) {
+        Player lilyBukkit = getLilyBukkit();
+        if (lilyBukkit == null) return;
+
+        int hotbarSlot = resolveHotbarSlot(lilyBukkit, slot);
+
+        runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + hotbarSlot);
+
+        int newSlot  = hotbarSlot - 1;
+        int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
+        org.bukkit.event.player.PlayerItemHeldEvent heldEvent =
+                new org.bukkit.event.player.PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
+        org.bukkit.Bukkit.getPluginManager().callEvent(heldEvent);
+        if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
+    }
+
+    /**
+     * Resolves an arbitrary 1-based inventory slot to a hotbar slot (1-9), swapping
+     * the item into hotbar slot 1 first if it currently lives in the main inventory.
+     */
+    private static int resolveHotbarSlot(Player lily, int slot) {
+        if (slot < 1 || slot > 36) {
+            LOGGER.warn("[INVENTORY] Slot {} out of range (expected 1-36), leaving current slot", slot);
+            return lily.getInventory().getHeldItemSlot() + 1;
+        }
+
+        if (slot <= 9) {
+            return slot; // ya está en la hotbar
+        }
+
+        int mainInvIndex = slot - 1;
+        org.bukkit.inventory.PlayerInventory inv = lily.getInventory();
+
+        final int scratchHotbarSlot = 1; // siempre se intercambia a través de la hotbar 1
+        org.bukkit.inventory.ItemStack targetItem = inv.getItem(mainInvIndex);
+        org.bukkit.inventory.ItemStack hotbarItem = inv.getItem(scratchHotbarSlot - 1);
+
+        inv.setItem(mainInvIndex, hotbarItem);
+        inv.setItem(scratchHotbarSlot - 1, targetItem);
+
+        LOGGER.info("[INVENTORY] Swapped slot {} into hotbar slot {}", slot, scratchHotbarSlot);
+        return scratchHotbarSlot;
     }
 }
