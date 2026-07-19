@@ -114,17 +114,7 @@ public class LilyCommandHandler {
                     // If slot specified, swap to it first
                     if (cmd.has("slot")) {
                         int slot = cmd.get("slot").getAsInt();
-                        // Swap to the slot
-                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
-                        // Fire held event
-                        Player lilyBukkit = LilyUtils.getLilyBukkit();
-                        if (lilyBukkit != null) {
-                            int newSlot = slot - 1;
-                            int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
-                            PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
-                            Bukkit.getPluginManager().callEvent(heldEvent);
-                            if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
-                        }
+                        switchToSlot(slot);
                         // Attack after a small delay
                         Bukkit.getScheduler().runTaskLater(
                                 Bukkit.getPluginManager().getPlugins()[0],
@@ -156,17 +146,7 @@ public class LilyCommandHandler {
                 // If slot specified, swap to it first
                 if (cmd.has("slot")) {
                     int slot = cmd.get("slot").getAsInt();
-                    // Swap to the slot
-                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
-                    // Fire held event
-                    Player lilyBukkit = LilyUtils.getLilyBukkit();
-                    if (lilyBukkit != null) {
-                        int newSlot = slot - 1;
-                        int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
-                        PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
-                        Bukkit.getPluginManager().callEvent(heldEvent);
-                        if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
-                    }
+                    switchToSlot(slot);
                     // Use after a small delay (2 ticks = 0.1s)
                     Bukkit.getScheduler().runTaskLater(
                             Bukkit.getPluginManager().getPlugins()[0],
@@ -184,21 +164,12 @@ public class LilyCommandHandler {
 
             case "drop" -> {
                 int slot = cmd.get("slot").getAsInt();
-                if (slot < 1 || slot > 9) {
+                if (slot < 1 || slot > 36) {
                     LOGGER.warn("[DROP] Invalid slot: {}", slot);
                     return;
                 }
                 // First switch to the slot, then drop
-                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
-                // Fire held event for the swap
-                Player lilyBukkit = LilyUtils.getLilyBukkit();
-                if (lilyBukkit != null) {
-                    int newSlot = slot - 1;
-                    int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
-                    PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
-                    Bukkit.getPluginManager().callEvent(heldEvent);
-                    if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
-                }
+                switchToSlot(slot);
                 // Drop after a small delay
                 Bukkit.getScheduler().runTaskLater(
                         Bukkit.getPluginManager().getPlugins()[0],
@@ -233,15 +204,7 @@ public class LilyCommandHandler {
 
             case "hotbar" -> {
                 int slot = cmd.get("slot").getAsInt();
-                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + slot);
-                Player lilyBukkit = LilyUtils.getLilyBukkit();
-                if (lilyBukkit != null) {
-                    int newSlot  = slot - 1;
-                    int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
-                    PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
-                    Bukkit.getPluginManager().callEvent(heldEvent);
-                    if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
-                }
+                switchToSlot(slot);
             }
 
             case "spawn" -> {
@@ -416,14 +379,14 @@ public class LilyCommandHandler {
             else passives.add(o);
         }
 
-        JsonObject hotbar = LilyUtils.scanHotbar(lily); // NEW
+        JsonObject inventory = LilyUtils.scanInventory(lily);
 
         JsonObject res = new JsonObject();
         res.addProperty("type", "environment_scan");
         res.add("hostiles", hostiles);
         res.add("passives", passives);
         res.add("blocks_of_interest", blocks);
-        res.add("hotbar", hotbar); // NEW
+        res.add("inventory", inventory);
         LilyUtils.broadcast(res);
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -475,6 +438,62 @@ public class LilyCommandHandler {
         res.add("bindings", bindings);
         LilyUtils.broadcast(res);
         LOGGER.info("[Bindings] Sent {} bindings to Node", bindings.size());
+    }
+
+    // ─── Inventory slot handling ────────────────────────────────────────────────
+
+    /**
+     * Switches Lily's held hotbar slot to whatever item lives at `slot` — a 1-based
+     * index across her whole inventory (1-9 = hotbar, 10-36 = main inventory, i.e.
+     * Bukkit's PlayerInventory indices 0-35 offset by one to match the existing
+     * "hotbar 1-9" convention). If the item isn't already in the hotbar, it's swapped
+     * into hotbar slot 1 first — displacing whatever was there into the now-vacated
+     * inventory slot — and Lily switches to slot 1 instead.
+     */
+    private static void switchToSlot(int slot) {
+        Player lilyBukkit = LilyUtils.getLilyBukkit();
+        if (lilyBukkit == null) return;
+
+        int hotbarSlot = resolveHotbarSlot(lilyBukkit, slot);
+
+        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " hotbar " + hotbarSlot);
+
+        int newSlot  = hotbarSlot - 1;
+        int prevSlot = lilyBukkit.getInventory().getHeldItemSlot();
+        PlayerItemHeldEvent heldEvent = new PlayerItemHeldEvent(lilyBukkit, prevSlot, newSlot);
+        Bukkit.getPluginManager().callEvent(heldEvent);
+        if (!heldEvent.isCancelled()) lilyBukkit.getInventory().setHeldItemSlot(newSlot);
+    }
+
+    /**
+     * Resolves an arbitrary 1-based inventory slot to a hotbar slot (1-9), swapping
+     * the item into hotbar slot 1 first if it currently lives in the main inventory.
+     */
+    private static int resolveHotbarSlot(Player lily, int slot) {
+        if (slot < 1 || slot > 36) {
+            LOGGER.warn("[INVENTORY] Slot {} out of range (expected 1-36), leaving current slot", slot);
+            return lily.getInventory().getHeldItemSlot() + 1;
+        }
+
+        if (slot <= 9) {
+            return slot; // ya está en la hotbar
+        }
+
+        // Inventario principal: los índices de Bukkit van de 9 a 35 para los 27 slots
+        // principales. Nuestra numeración es 1-based sobre todo el inventario (1-9
+        // hotbar, 10-36 inventario principal), así que slot 10 => índice 9, slot 36 => índice 35.
+        int mainInvIndex = slot - 1;
+        org.bukkit.inventory.PlayerInventory inv = lily.getInventory();
+
+        final int scratchHotbarSlot = 1; // siempre se intercambia a través de la hotbar 1
+        org.bukkit.inventory.ItemStack targetItem = inv.getItem(mainInvIndex);
+        org.bukkit.inventory.ItemStack hotbarItem = inv.getItem(scratchHotbarSlot - 1);
+
+        inv.setItem(mainInvIndex, hotbarItem);
+        inv.setItem(scratchHotbarSlot - 1, targetItem);
+
+        LOGGER.info("[INVENTORY] Swapped slot {} into hotbar slot {}", slot, scratchHotbarSlot);
+        return scratchHotbarSlot;
     }
 
     // ─── Helper methods ────────────────────────────────────────────────────────

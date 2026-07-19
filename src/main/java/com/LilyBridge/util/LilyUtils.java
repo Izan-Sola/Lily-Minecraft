@@ -214,19 +214,21 @@ public class LilyUtils {
     // the result (or, downstream, the LLM prompt) regardless of how much is
     // actually around.
     // ─────────────────────────────────────────────────────────────────────────
-    public static JsonObject scanHotbar(ServerPlayer lily) {
-        JsonObject hotbar = new JsonObject();
-        for (int slot = 0; slot < 9; slot++) {
+// Replaces the old scanHotbar(ServerPlayer) method in LilyUtils.java.
+// Same 1-based slot numbering used everywhere else in the codebase (1-9 hotbar,
+// 10-36 main inventory), but now covers the whole 36-slot inventory instead of
+// just the hotbar, and skips empty slots entirely instead of sending "empty" —
+// keeps the payload small since most of a 36-slot inventory is usually empty.
+    public static JsonObject scanInventory(ServerPlayer lily) {
+        JsonObject inventory = new JsonObject();
+        for (int slot = 0; slot < 36; slot++) {
             ItemStack stack = lily.getInventory().getItem(slot);
-            if (stack.isEmpty()) {
-                hotbar.addProperty(String.valueOf(slot + 1), "empty");
-            } else {
-                String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
-                String display = stack.getCount() > 1 ? id + " x" + stack.getCount() : id;
-                hotbar.addProperty(String.valueOf(slot + 1), display);
-            }
+            if (stack.isEmpty()) continue; // ignorado, no se envía
+            String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+            String display = stack.getCount() > 1 ? id + " x" + stack.getCount() : id;
+            inventory.addProperty(String.valueOf(slot + 1), display);
         }
-        return hotbar;
+        return inventory;
     }
     /**
      * Returns up to {@code limit} entities (any type — players, mobs, items,

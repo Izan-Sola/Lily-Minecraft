@@ -3,6 +3,7 @@ package com.LilyBridge.util;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.FluidTags;
 
 import java.util.*;
 
@@ -39,6 +40,18 @@ public class LilyPathfinder {
      * Retorna "stop" si ya está suficientemente cerca.
      */
     public static String getBestDirection(ServerPlayer lily, double targetX, double targetZ) {
+        return getBestDirection(lily, targetX, targetZ, null);
+    }
+
+    /**
+     * Same as {@link #getBestDirection(ServerPlayer, double, double)}, but takes the
+     * direction Lily is currently committed to (if any) and biases tie-breaking toward
+     * keeping it. Without this, two equally-short routes around a wide obstacle (e.g.
+     * a wall dead ahead with roughly symmetric space to either side) can flip which one
+     * "wins" from one recompute to the next as her position shifts slightly, causing her
+     * to zigzag left/right instead of committing to one side and getting around it.
+     */
+    public static String getBestDirection(ServerPlayer lily, double targetX, double targetZ, String preferredDir) {
         ServerLevel level = (ServerLevel) lily.level();
         BlockPos start    = lily.blockPosition();
 
@@ -59,6 +72,19 @@ public class LilyPathfinder {
                 { roundDir( cosY),  roundDir( sinY) }, // right
         };
         String[] dirNames = { "forward", "back", "left", "right" };
+
+        // Si ya hay una dirección "preferida" (la actual), la ponemos primera para que,
+        // ante caminos de igual longitud, el BFS la encuentre y devuelva antes que las
+        // alternativas — sesga el desempate hacia mantener el rumbo.
+        if (preferredDir != null) {
+            for (int i = 1; i < dirNames.length; i++) {
+                if (dirNames[i].equals(preferredDir)) {
+                    String tmpName = dirNames[0]; dirNames[0] = dirNames[i]; dirNames[i] = tmpName;
+                    int[] tmpDelta = worldDeltas[0]; worldDeltas[0] = worldDeltas[i]; worldDeltas[i] = tmpDelta;
+                    break;
+                }
+            }
+        }
 
         // BFS desde la posición actual
         String bfsResult = bfs(level, start, targetX, targetZ, worldDeltas, dirNames);
@@ -180,9 +206,12 @@ public class LilyPathfinder {
         BlockPos next     = feet.offset(dx, 0, dz);
         BlockPos nextHead = next.above();
 
-        // Fluidos = peligro absoluto
-        if (!level.getFluidState(next).isEmpty())     return null;
-        if (!level.getFluidState(nextHead).isEmpty()) return null;
+        // Lava es el único fluido que tratamos como peligro absoluto — el agua es
+        // perfectamente transitable (caminar por el fondo o nadar), no hace falta evitarla.
+        if (level.getFluidState(next).is(FluidTags.LAVA))     return null;
+        if (level.getFluidState(nextHead).is(FluidTags.LAVA)) return null;
+
+        boolean nextIsWater = !level.getFluidState(next).isEmpty();
 
         boolean nextFeetSolid = level.getBlockState(next).isSolid();
 
@@ -199,16 +228,24 @@ public class LilyPathfinder {
         // No hay pared a la altura de los pies — comprueba techo a la altura actual
         if (level.getBlockState(nextHead).isSolid()) return null; // techo bajo
 
+        // Agua: el fluido la sostiene, no hace falta suelo sólido ni comprobar caída.
+        if (nextIsWater) {
+            return new StepResult(next, false);
+        }
+
         // ¿Hay suelo justo debajo?
         if (level.getBlockState(next.below()).isSolid()) {
             return new StepResult(next, false); // suelo plano
         }
 
-        // Caída — busca suelo dentro de una distancia segura
+        // Caída — busca suelo (o agua) dentro de una distancia segura
         for (int fall = 2; fall <= MAX_SAFE_FALL + 1; fall++) {
             BlockPos ground = next.below(fall);
             if (level.getBlockState(ground).isSolid()) {
-                return new StepResult(ground.above(), false); // caída segura
+                return new StepResult(ground.above(), false); // caída segura sobre suelo
+            }
+            if (!level.getFluidState(ground).isEmpty() && !level.getFluidState(ground).is(FluidTags.LAVA)) {
+                return new StepResult(ground.above(), false); // caída segura sobre agua
             }
         }
 

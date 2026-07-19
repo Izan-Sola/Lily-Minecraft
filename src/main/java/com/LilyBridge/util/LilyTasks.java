@@ -19,11 +19,21 @@ public class LilyTasks {
     private static volatile Double  targetMoveZ          = null;
     private static volatile String  currentTargetDirection = null;
 
-    // Anti-stuck: guarda la posición hace 3 s y cuenta ticks sin avance
+    // Cada cuánto se recalcula el pathfinder mientras sigue un objetivo. Antes eran 20
+    // ticks (1s) — de sobra para que, moviéndose en línea recta, Lily recorriera varios
+    // bloques dentro de un peligro (agujero, lava) que no estaba en la única celda
+    // comprobada en el último recálculo, y para que un obstáculo ancho con dos rutas
+    // igual de cortas la hiciera zigzaguear entre ellas según la mínima variación de
+    // posición. Recalcular ~5x/s reduce drásticamente esa ventana ciega.
+    private static final long TARGET_TASK_INTERVAL_TICKS = 4L; // 0.2s
+
+    // Anti-stuck: guarda la posición hace ~3 s y cuenta iteraciones sin avance.
+    // Escalado junto con TARGET_TASK_INTERVAL_TICKS para seguir representando ~3s reales
+    // (15 iteraciones × 0.2s), no 15 × 1s como antes de acelerar el recálculo.
     private static volatile double  lastStuckX           = 0;
     private static volatile double  lastStuckZ           = 0;
     private static volatile int     stuckTicks           = 0;
-    private static final    int     STUCK_THRESHOLD      = 3; // iteraciones del target-task (~3 s)
+    private static final    int     STUCK_THRESHOLD      = 15; // iteraciones del target-task (~3 s)
 
     // ---------- Tareas Bukkit ----------
     private static BukkitTask movementJumpTask   = null;
@@ -213,7 +223,9 @@ public class LilyTasks {
                     }
 
                     // ── Pathfinding ───────────────────────────────────────────
-                    String newDir = LilyPathfinder.getBestDirection(lily, targetMoveX, targetMoveZ);
+                    // Pasamos la dirección actual para que, ante rutas empatadas, el
+                    // pathfinder prefiera mantener el rumbo en vez de zigzaguear.
+                    String newDir = LilyPathfinder.getBestDirection(lily, targetMoveX, targetMoveZ, currentTargetDirection);
 
                     if ("stop".equals(newDir)) {
                         stopAllMovement();
@@ -234,10 +246,11 @@ public class LilyTasks {
                     isMoving = true;
                     if (movementJumpTask == null || movementJumpTask.isCancelled())
                         startMovementJumpTask();
-                    // Nota: NO arrancamos movementSafetyTask aquí porque el pathfinder
-                    // ya garantiza que el paso elegido es seguro.
+                    // Nota: NO arrancamos movementSafetyTask aquí porque, recalculando
+                    // cada TARGET_TASK_INTERVAL_TICKS, el pathfinder revalida el terreno
+                    // con la frecuencia suficiente para hacer de safety-check también.
                 },
-                0L, 20L
+                0L, TARGET_TASK_INTERVAL_TICKS
         );
     }
 
