@@ -3,8 +3,6 @@ package com.LilyBridge.util;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.material.FluidState;
 
 import java.util.*;
 
@@ -15,13 +13,22 @@ import java.util.*;
  * que lleva al objetivo sin caer en agua, lava ni agujeros, y sorteando paredes bajas
  * mediante salto.  Si el BFS falla (camino completamente bloqueado), devuelve la dirección
  * greedy de emergencia más segura.
+ *
+ * FIX (2026-07): el BFS original ignoraba por completo el eje Y — cada nodo reutilizaba
+ * la altura de partida, así que en cuanto el camino subía o bajaba un bloque, las
+ * comprobaciones de "pared" / "techo" se hacían a la altura equivocada. Ahora cada paso
+ * calcula y devuelve la posición de pies resultante (subiendo al saltar una pared de 1
+ * bloque, o bajando al detectar una caída segura de 1-3 bloques), y el BFS avanza sobre
+ * esa posición real en vez de una copia plana en XZ.
  */
 public class LilyPathfinder {
 
-    // Cuántos bloques hacia adelante explora el BFS antes de rendirse
+    // Cuántos nodos explora el BFS antes de rendirse
     private static final int BFS_LIMIT = 200;
     // Radio horizontal de la exploración (bloques)
     private static final int BFS_RADIUS = 12;
+    // Caída máxima considerada seguro (bloques)
+    private static final int MAX_SAFE_FALL = 3;
 
     // -----------------------------------------------------------------------
     // API pública
@@ -66,7 +73,7 @@ public class LilyPathfinder {
      * Se usa desde LilyTasks para el safety-check.
      */
     public static boolean isSafeStep(ServerLevel level, BlockPos from, int worldDX, int worldDZ) {
-        return cellType(level, from.offset(worldDX, 0, worldDZ)) != CellType.DANGER;
+        return resolveStep(level, from, worldDX, worldDZ) != null;
     }
 
     // -----------------------------------------------------------------------
@@ -77,7 +84,7 @@ public class LilyPathfinder {
                               double targetX, double targetZ,
                               int[][] worldDeltas, String[] dirNames) {
 
-        // Estado: (blockPos, primeraDir usada, pasos dados)
+        // Estado: (posición de pies REAL tras el paso, primeraDir usada, pasos dados)
         record Node(BlockPos pos, int firstDirIdx, int steps) {}
 
         Queue<Node> queue   = new ArrayDeque<>();
@@ -87,16 +94,11 @@ public class LilyPathfinder {
 
         // Añade un vecino al BFS si es alcanzable
         for (int i = 0; i < 4; i++) {
-            BlockPos next = start.offset(worldDeltas[i][0], 0, worldDeltas[i][1]);
-            CellType ct   = cellType(level, next);
-            if (ct == CellType.DANGER) continue;
+            StepResult step = resolveStep(level, start, worldDeltas[i][0], worldDeltas[i][1]);
+            if (step == null) continue;
 
-            // Si hay pared de 1 bloque (JUMPABLE), se puede pasar con salto
-            BlockPos above = next.above();
-            if (ct == CellType.JUMPABLE && cellType(level, above) == CellType.DANGER) continue;
-
-            if (visited.add(packPos(next))) {
-                queue.add(new Node(next, i, 1));
+            if (visited.add(packPos(step.newFeet))) {
+                queue.add(new Node(step.newFeet, i, 1));
             }
         }
 
@@ -105,7 +107,7 @@ public class LilyPathfinder {
             Node cur = queue.poll();
             explored++;
 
-            // ¿Llegamos suficientemente cerca del objetivo?
+            // ¿Llegamos suficientemente cerca del objetivo? (comparación en XZ, como move_to)
             double distToGoal = Math.hypot(cur.pos.getX() - targetX, cur.pos.getZ() - targetZ);
             if (distToGoal < 1.5) {
                 return dirNames[cur.firstDirIdx];
@@ -117,17 +119,11 @@ public class LilyPathfinder {
             if (startDistX > BFS_RADIUS || startDistZ > BFS_RADIUS) continue;
 
             for (int[] delta : worldDeltas) {
-                BlockPos next = cur.pos.offset(delta[0], 0, delta[1]);
-                if (!visited.add(packPos(next))) continue;
+                StepResult step = resolveStep(level, cur.pos, delta[0], delta[1]);
+                if (step == null) continue;
+                if (!visited.add(packPos(step.newFeet))) continue;
 
-                CellType ct = cellType(level, next);
-                if (ct == CellType.DANGER) continue;
-                if (ct == CellType.JUMPABLE) {
-                    // Solo transitable si hay espacio encima
-                    if (cellType(level, next.above()) == CellType.DANGER) continue;
-                }
-
-                queue.add(new Node(next, cur.firstDirIdx, cur.steps + 1));
+                queue.add(new Node(step.newFeet, cur.firstDirIdx, cur.steps + 1));
             }
         }
 
@@ -149,14 +145,13 @@ public class LilyPathfinder {
         double bestScore = -9999;
 
         for (int i = 0; i < 4; i++) {
-            BlockPos next = start.offset(worldDeltas[i][0], 0, worldDeltas[i][1]);
-            CellType ct   = cellType(level, next);
-            if (ct == CellType.DANGER) continue;
+            StepResult step = resolveStep(level, start, worldDeltas[i][0], worldDeltas[i][1]);
+            if (step == null) continue;
 
             // Alineación con el objetivo
             double dot   = worldDeltas[i][0] * normDX + worldDeltas[i][1] * normDZ;
             // Penalizar casillas que requieren salto
-            double penalty = (ct == CellType.JUMPABLE) ? 0.2 : 0.0;
+            double penalty = step.requiresJump ? 0.2 : 0.0;
             double score   = dot - penalty;
 
             if (score > bestScore) {
@@ -169,56 +164,55 @@ public class LilyPathfinder {
     }
 
     // -----------------------------------------------------------------------
-    // Clasificación de celdas
+    // Resolución de un paso (con altura real)
     // -----------------------------------------------------------------------
 
-    private enum CellType {
-        OPEN,      // transitable sin salto
-        JUMPABLE,  // hay un bloque a la altura de los pies pero la cabeza está libre → salto
-        DANGER     // agua, lava, vacío profundo, techo bajo, etc.
-    }
+    /** Resultado de intentar dar un paso: dónde acaban los pies, y si hizo falta saltar. */
+    private record StepResult(BlockPos newFeet, boolean requiresJump) {}
 
     /**
-     * Clasifica la celda (blockPos = posición de los pies del jugador).
-     * Asume que el jugador ocupa feet y feet+1 (cabeza).
+     * Calcula si se puede dar un paso desde `feet` en la dirección (dx, dz), y si es así,
+     * dónde termina la posición de los pies — que puede ser un bloque más arriba (subida
+     * de 1 bloque, con salto) o varios más abajo (caída segura de 1-3 bloques). Devuelve
+     * null si el paso es peligroso o está bloqueado.
      */
-    private static CellType cellType(ServerLevel level, BlockPos feet) {
-        BlockPos head  = feet.above();
-        BlockPos below = feet.below();
+    private static StepResult resolveStep(ServerLevel level, BlockPos feet, int dx, int dz) {
+        BlockPos next     = feet.offset(dx, 0, dz);
+        BlockPos nextHead = next.above();
 
         // Fluidos = peligro absoluto
-        if (!level.getFluidState(feet).isEmpty()) return CellType.DANGER;
-        if (!level.getFluidState(head).isEmpty()) return CellType.DANGER;
+        if (!level.getFluidState(next).isEmpty())     return null;
+        if (!level.getFluidState(nextHead).isEmpty()) return null;
 
-        // Agujero profundo: busca suelo en los 4 bloques inferiores
-        if (level.getBlockState(below).isAir()) {
-            boolean groundFound = false;
-            for (int dy = 2; dy <= 4; dy++) {
-                if (!level.getBlockState(feet.below(dy)).isAir()) {
-                    groundFound = true;
-                    break;
-                }
+        boolean nextFeetSolid = level.getBlockState(next).isSolid();
+
+        if (nextFeetSolid) {
+            // Pared a la altura de los pies — ¿se puede subir de un salto?
+            BlockPos landing     = next.above();
+            BlockPos landingHead = landing.above();
+            if (level.getBlockState(landing).isSolid() || level.getBlockState(landingHead).isSolid()) {
+                return null; // pared demasiado alta / sin hueco para subir
             }
-            if (!groundFound) return CellType.DANGER;
-            // Caída de 1-3 bloques: válida pero puntúa peor → tratada como OPEN
-            // (el jugador puede caer; no bloqueante)
+            return new StepResult(landing, true);
         }
 
-        // Pared a la altura de los pies (block sólido)
-        BlockState feetState = level.getBlockState(feet);
-        if (feetState.isSolid()) {
-            // ¿Hay espacio encima para saltar?
-            if (!level.getBlockState(head).isSolid()
-                    && !level.getBlockState(head.above()).isSolid()) {
-                return CellType.JUMPABLE;
-            }
-            return CellType.DANGER; // pared sin espacio para saltar
+        // No hay pared a la altura de los pies — comprueba techo a la altura actual
+        if (level.getBlockState(nextHead).isSolid()) return null; // techo bajo
+
+        // ¿Hay suelo justo debajo?
+        if (level.getBlockState(next.below()).isSolid()) {
+            return new StepResult(next, false); // suelo plano
         }
 
-        // Techo bajo (head sólido)
-        if (level.getBlockState(head).isSolid()) return CellType.DANGER;
+        // Caída — busca suelo dentro de una distancia segura
+        for (int fall = 2; fall <= MAX_SAFE_FALL + 1; fall++) {
+            BlockPos ground = next.below(fall);
+            if (level.getBlockState(ground).isSolid()) {
+                return new StepResult(ground.above(), false); // caída segura
+            }
+        }
 
-        return CellType.OPEN;
+        return null; // agujero demasiado profundo / sin fondo visible
     }
 
     // -----------------------------------------------------------------------
@@ -226,7 +220,8 @@ public class LilyPathfinder {
     // -----------------------------------------------------------------------
 
     private static long packPos(BlockPos p) {
-        // Paquetiza XZ en un long para el set de visitados (Y ignorada)
+        // Paquetiza XZ en un long para el set de visitados (Y ignorada a propósito:
+        // el mismo XZ no debería revisitarse aunque varíe la altura en este caso de uso)
         return ((long)(p.getX() + 32768) << 16) | (p.getZ() + 32768);
     }
 

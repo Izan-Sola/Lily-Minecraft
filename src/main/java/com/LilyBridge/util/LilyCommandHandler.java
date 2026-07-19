@@ -25,12 +25,15 @@ import static com.LilyBridge.util.LilyTasks.*;
 
 public class LilyCommandHandler {
 
-    static volatile boolean isMoving = false;
-    private static volatile String currentMoveDirection = null;
-
-    private static volatile Double targetMoveX = null;
-    private static volatile Double targetMoveZ = null;
-    private static volatile String currentTargetDirection = null;
+    // NOTE: movement state (targetMoveX/Z, currentMoveDirection, etc.) used to be
+    // duplicated here AND in LilyTasks — two separate sets of fields with the same
+    // names. The "move_to" case was writing to this class's copies while
+    // startMovementTargetTask() (statically imported from LilyTasks) read LilyTasks'
+    // copies, which never got set. That silently broke all target-following movement:
+    // the task would see a null target on its very first tick and immediately cancel
+    // itself. Removed the dead duplicates here — all movement now goes through
+    // LilyTasks' public API (startMoveTo / startSimpleMove / stopAllMovement), which
+    // owns the real state.
 
     // ─────────────────────────────────────────────────────────────────────────
     // CONFIG — tune behavior here, nothing else needs to change
@@ -42,7 +45,7 @@ public class LilyCommandHandler {
     /** All tunables for the periodic environment scan. Change values here only. */
     private static final class EnvScanConfig {
         /** How often the scan runs. 20 ticks = 1 second. */
-        static final long INTERVAL_TICKS = 100L; // every 3 seconds
+        static final long INTERVAL_TICKS = 100L; // every 5 seconds
 
         /** Entities: sphere radius in blocks, and max entities reported per scan (nearest-first). */
         static final double ENTITY_RADIUS = 24.0;
@@ -52,8 +55,8 @@ public class LilyCommandHandler {
         static final int BLOCK_RADIUS = 16;
         /** Vertical band around Lily: how many blocks above her head / below her feet to include.
          *  Default (1,1) = 4 blocks tall total: 1 below feet, feet, head, 1 above head. */
-        static final int BLOCK_HEIGHT_ABOVE_HEAD = 2;
-        static final int BLOCK_HEIGHT_BELOW_FEET = 2;
+        static final int BLOCK_HEIGHT_ABOVE_HEAD = 1;
+        static final int BLOCK_HEIGHT_BELOW_FEET = 1;
         static final int BLOCK_LIMIT = 20;
     }
 
@@ -76,39 +79,16 @@ public class LilyCommandHandler {
             case "move_to" -> {
                 double x = cmd.get("x").getAsDouble();
                 double z = cmd.get("z").getAsDouble();
-                stopMovementJumpTask();
-                stopMovementSafetyTask();
-                currentMoveDirection = null;
-                targetMoveX = x;
-                targetMoveZ = z;
-                startMovementTargetTask();
+                startMoveTo(x, z);
             }
 
             case "move" -> {
                 String direction = cmd.get("direction").getAsString();
-                if (!direction.equals("stop")) {
-                    currentMoveDirection = direction;
-                    stopMovementTargetTask();
-                    startMovementJumpTask();
-                    startMovementSafetyTask();
-                } else {
-                    stopMovementTargetTask();
-                    stopMovementJumpTask();
-                    stopMovementSafetyTask();
-                    currentMoveDirection = null;
-                }
-                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + direction);
+                startSimpleMove(direction);
             }
 
             case "stop" -> {
-                stopMovementJumpTask();
-                stopMovementSafetyTask();
-                stopMovementTargetTask();
-                targetMoveX = null;
-                targetMoveZ = null;
-                currentMoveDirection = null;
-                currentTargetDirection = null;
-                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
+                stopAllMovement();
                 Player lilyBukkit = LilyUtils.getLilyBukkit();
                 if (lilyBukkit != null && lilyBukkit.isSneaking()) {
                     LilyUtils.scheduleSneakState(lilyBukkit, false);
@@ -125,10 +105,7 @@ public class LilyCommandHandler {
             case "attack" -> {
                 String mode = cmd.has("mode") ? cmd.get("mode").getAsString() : "once";
                 if (mode.equals("stop")) {
-                    stopMovementJumpTask();
-                    stopMovementSafetyTask();
-                    currentMoveDirection = null;
-                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
+                    stopAllMovement();
                     Player lilyBukkit = LilyUtils.getLilyBukkit();
                     if (lilyBukkit != null && lilyBukkit.isSneaking()) {
                         LilyUtils.scheduleSneakState(lilyBukkit, false);
@@ -238,7 +215,15 @@ public class LilyCommandHandler {
                 if (lily == null) return;
                 LilyUtils.scheduleSneakState(lily, sneaking);
             }
-
+            case "break_closest_generic" -> {
+                String blockName = cmd.get("block").getAsString();
+                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : null;
+                ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+                BlockPos pos = BlockFinder.findClosestBlock(lily, blockName, radius);
+                if (pos != null) {
+                    miningManager.mine(pos);
+                }
+            }
             case "sprint" -> {
                 boolean sprinting = cmd.has("value") && cmd.get("value").getAsBoolean();
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + (sprinting ? " sprint" : " unsprint"));

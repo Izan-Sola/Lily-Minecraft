@@ -221,7 +221,10 @@ public class LilyTasks {
                     }
 
                     if (!newDir.equals(currentTargetDirection)) {
-                        LilyBridge.LOGGER.info("[TARGET] Nueva dirección: {} (dist={:.1f})", newDir, distToGoal);
+                        // FIX: SLF4J solo entiende marcadores "{}", no formatos tipo "{:.1f}" —
+                        // eso imprimía el texto literal en vez del valor. Se formatea antes.
+                        LilyBridge.LOGGER.info("[TARGET] Nueva dirección: {} (dist={})",
+                                newDir, String.format("%.1f", distToGoal));
                         currentTargetDirection = newDir;
                         currentMoveDirection   = newDir;
                         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + newDir);
