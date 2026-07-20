@@ -77,12 +77,14 @@ public class LilyCommandHandler {
             case "run_command" -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " run " + cmd.get("command").getAsString());
 
             case "move_to" -> {
+                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " sprint");
                 double x = cmd.get("x").getAsDouble();
                 double z = cmd.get("z").getAsDouble();
                 startMoveTo(x, z);
             }
 
             case "move" -> {
+                LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " sprint");
                 String direction = cmd.get("direction").getAsString();
                 startSimpleMove(direction);
             }

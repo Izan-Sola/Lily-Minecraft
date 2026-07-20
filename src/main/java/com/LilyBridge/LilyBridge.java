@@ -1,5 +1,6 @@
 package com.LilyBridge;
 
+import net.neoforged.neoforge.event.entity.player.ItemEntityPickupEvent;
 import com.LilyBridge.commands.LilyCommands;
 import com.LilyBridge.util.AbilityDataLoader;
 import com.google.gson.Gson;
@@ -138,6 +139,14 @@ public class LilyBridge {
             }
         }
 
+    }
+
+    @SubscribeEvent
+    public void onItemPickup(ItemEntityPickupEvent.Post event) {
+        if (!(event.getPlayer() instanceof ServerPlayer player)) return;
+        if (!player.getGameProfile().getName().equals(LilyBridge.BOT_NAME)) return;
+
+        LilyArmorManager.tryAutoEquip(player, event.getOriginalStack());
     }
     private static void sendDuelResultToNode(String winner, String loser) {
         JsonObject res = new JsonObject();

@@ -163,12 +163,12 @@ public class LilyUtils {
     }
 
     public static void broadcast(JsonObject msg) {
-        if (LilyBridge.wsClient == null) return;
+        if (LilyBridge.wsClient == null || !LilyBridge.wsClient.isOpen()) return;
         LilyBridge.wsClient.send(LilyBridge.GSON.toJson(msg));
     }
 
     public static void broadcast(String type, String... keyValues) {
-        if (LilyBridge.wsClient == null) return;
+        if (LilyBridge.wsClient == null || !LilyBridge.wsClient.isOpen()) return;
         JsonObject msg = new JsonObject();
         msg.addProperty("type", type);
         for (int i = 0; i < keyValues.length - 1; i += 2) {
