@@ -1,5 +1,10 @@
 package com.LilyBridge;
 
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.vehicle.Boat;
+import net.neoforged.neoforge.event.entity.EntityMountEvent;
+import net.neoforged.neoforge.event.entity.player.CanPlayerSleepEvent;
 import net.neoforged.neoforge.event.entity.player.ItemEntityPickupEvent;
 import com.LilyBridge.commands.LilyCommands;
 import com.LilyBridge.util.AbilityDataLoader;
@@ -86,7 +91,7 @@ public class LilyBridge {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         LilyTasks.stopAllMovement();
-        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
+        //LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " kill");
 
         if (wsClient != null) {
             try { wsClient.close(); } catch (Exception e) {
@@ -118,7 +123,7 @@ public class LilyBridge {
 
         // 1. Auto-reload Lily if she dies
         if (deadName.equals(LilyBridge.BOT_NAME)) {
-            LilyBridge.LOGGER.info("[LilyForge] Lily died! Queueing automatic bot load...");
+            LilyBridge.LOGGER.info("[LilyForage] Lily died! Queueing automatic bot load...");
             // Use your scheduler to reload her safely 10 ticks later
             LilyUtils.scheduleCommand(10, "bot load " + LilyBridge.BOT_NAME);
         }
@@ -140,7 +145,41 @@ public class LilyBridge {
         }
 
     }
+    @SubscribeEvent
+    public void onEntityMount(EntityMountEvent event) {
+        if (!event.isMounting()) return;                       // only care about starting to ride, not dismount
+        if (!(event.getEntityMounting() instanceof ServerPlayer player)) return;
+        if (player.getGameProfile().getName().equals(LilyBridge.BOT_NAME)) return; // ignore Lily's own mount
 
+        if (!(event.getEntityBeingMounted() instanceof Boat boat)) return;
+
+        ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+        if (lily == null || lily.isPassenger()) return;
+        if (boat.getPassengers().size() > 1) return; // no free seat
+        if (lily.distanceTo(player) > 4.0) return;
+
+        LilyTasks.approachAndUse(lily, boat);
+    }
+
+    @SubscribeEvent
+    public void onCanPlayerSleep(CanPlayerSleepEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        if (player.getGameProfile().getName().equals(BOT_NAME)) return;
+
+        // Only react if vanilla is actually going to let them sleep (not too far
+        // from bed, no monsters nearby, etc.) — no point sending Lily to a bed
+        // if the sleep attempt is about to fail anyway.
+        if (event.getProblem() != null) return;
+
+        ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+        if (lily == null || lily.isSleeping()) return;
+        if (lily.distanceTo(player) > 4.0) return;
+
+        BlockPos bed = LilyUtils.findNearestUnoccupiedBed(lily);
+        if (bed == null) return; // no free bed nearby, don't force it
+
+        LilyTasks.approachAndUse(lily, bed);
+    }
     @SubscribeEvent
     public void onItemPickup(ItemEntityPickupEvent.Post event) {
         if (!(event.getPlayer() instanceof ServerPlayer player)) return;

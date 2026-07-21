@@ -155,11 +155,11 @@ public class LilyCommandHandler {
                     // Use after a small delay (2 ticks = 0.1s)
                     Bukkit.getScheduler().runTaskLater(
                             Bukkit.getPluginManager().getPlugins()[0],
-                            () -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use once"),
+                            () -> LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use continue"),
                             2L
                     );
                 } else {
-                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use once");
+                    LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " use continue");
                     Player lilyBukkit = LilyUtils.getLilyBukkit();
                     if (lilyBukkit != null) {
                         Bukkit.getPluginManager().callEvent(new PlayerAnimationEvent(lilyBukkit, PlayerAnimationType.ARM_SWING));
@@ -193,7 +193,7 @@ public class LilyCommandHandler {
             }
             case "break_closest_generic" -> {
                 String blockName = cmd.get("block").getAsString();
-                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : null;
+                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : 3;
                 ServerPlayer lily = LilyUtils.getLilyServerPlayer();
                 BlockPos pos = BlockFinder.findClosestBlock(lily, blockName, radius);
                 if (pos != null) {

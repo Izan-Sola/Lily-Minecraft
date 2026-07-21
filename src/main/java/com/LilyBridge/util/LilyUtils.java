@@ -12,6 +12,8 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.phys.Vec3;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Monster;
@@ -251,7 +253,27 @@ public class LilyUtils {
                 }
         );
     }
+    public static BlockPos findNearestUnoccupiedBed(ServerPlayer lily) {
+        BlockPos origin = lily.blockPosition();
+        Level level = lily.level();
+        BlockPos closest = null;
+        double closestDist = Double.MAX_VALUE;
+        int radius = 16;
 
+        for (BlockPos pos : BlockPos.betweenClosed(
+                origin.offset(-radius, -radius, -radius),
+                origin.offset(radius, radius, radius))) {
+            BlockState state = level.getBlockState(pos);
+            if (state.is(BlockTags.BEDS) && !state.getValue(BedBlock.OCCUPIED)) {
+                double d = pos.distSqr(origin);
+                if (d < closestDist) {
+                    closestDist = d;
+                    closest = pos.immutable(); // betweenClosed reuses a mutable BlockPos
+                }
+            }
+        }
+        return closest;
+    }
     // ─────────────────────────────────────────────────────────────────────────
     // ENVIRONMENT AWARENESS — entity scan + blocks-of-interest scan.
     // Both are capped and sorted nearest-first so a busy area never floods
