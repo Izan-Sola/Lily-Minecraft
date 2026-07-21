@@ -377,15 +377,14 @@ public class LilyCommandHandler {
         JsonArray hostiles = new JsonArray();
         JsonArray passives = new JsonArray();
         for (JsonElement el : entities) {
-
             JsonObject o = el.getAsJsonObject();
-
             if (o.has("name")) continue;
             if (o.has("hostile") && o.get("hostile").getAsBoolean()) hostiles.add(o);
             else passives.add(o);
         }
 
         JsonObject inventory = LilyUtils.scanInventory(lily);
+        JsonObject environmentInfo = LilyUtils.getEnvironmentInfo(lily);   // NEW
 
         JsonObject res = new JsonObject();
         res.addProperty("type", "environment_scan");
@@ -393,6 +392,7 @@ public class LilyCommandHandler {
         res.add("passives", passives);
         res.add("blocks_of_interest", blocks);
         res.add("inventory", inventory);
+        res.add("environment_info", environmentInfo);   // NEW
         LilyUtils.broadcast(res);
     }
     // ─────────────────────────────────────────────────────────────────────────

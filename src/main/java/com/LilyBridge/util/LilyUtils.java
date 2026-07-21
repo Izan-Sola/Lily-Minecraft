@@ -111,7 +111,39 @@ public class LilyUtils {
 
         return m;
     }
+    // ─────────────────────────────────────────────────────────────────────────
+// ENVIRONMENT INFO — biome, time of day, weather, underground check.
+// Bundled into the environment_scan payload alongside entities/blocks/inventory.
+// ─────────────────────────────────────────────────────────────────────────
+    public static JsonObject getEnvironmentInfo(ServerPlayer lily) {
+        ServerLevel level = (ServerLevel) lily.level();
+        BlockPos pos = lily.blockPosition();
+        JsonObject info = new JsonObject();
 
+        String biomeId = level.getBiome(pos)
+                .unwrapKey()
+                .map(k -> k.location().toString())
+                .orElse("unknown");
+        info.addProperty("biome", biomeId.replace("minecraft:", ""));
+
+        long dayTime = level.getDayTime() % 24000;
+        String timeOfDay;
+        if (dayTime < 1000) timeOfDay = "sunrise";
+        else if (dayTime < 6000) timeOfDay = "morning";
+        else if (dayTime < 9000) timeOfDay = "midday";
+        else if (dayTime < 12000) timeOfDay = "afternoon";
+        else if (dayTime < 13000) timeOfDay = "sunset";
+        else if (dayTime < 18000) timeOfDay = "night";
+        else if (dayTime < 22000) timeOfDay = "midnight";
+        else timeOfDay = "predawn";
+        info.addProperty("time_of_day", timeOfDay);
+
+        info.addProperty("is_raining", level.isRaining());
+        info.addProperty("is_thundering", level.isThundering());
+        info.addProperty("can_see_sky", level.canSeeSky(pos)); // false ≈ underground/cave
+
+        return info;
+    }
     public static Player getLilyBukkit() {
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (p.getName().equals(LilyBridge.BOT_NAME)) return p;
