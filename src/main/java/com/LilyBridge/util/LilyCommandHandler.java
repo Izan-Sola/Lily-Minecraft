@@ -144,7 +144,16 @@ public class LilyCommandHandler {
                 LilyUtils.equipBestToolFor(pos);
                 MiningManager.mine(pos);
             }
-
+            case "break_closest_generic" -> {
+                String blockName = cmd.get("block").getAsString();
+                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : 3;
+                ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+                BlockPos pos = BlockFinder.findClosestBlock(lily, blockName, radius);
+                if (pos != null) {
+                    LilyUtils.equipBestToolFor(pos);
+                    MiningManager.mine(pos);
+                }
+            }
             case "cancel_break" -> MiningManager.cancel();
 
             case "use" -> {
@@ -191,16 +200,7 @@ public class LilyCommandHandler {
                 if (lily == null) return;
                 LilyUtils.scheduleSneakState(lily, sneaking);
             }
-            case "break_closest_generic" -> {
-                String blockName = cmd.get("block").getAsString();
-                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : 3;
-                ServerPlayer lily = LilyUtils.getLilyServerPlayer();
-                BlockPos pos = BlockFinder.findClosestBlock(lily, blockName, radius);
-                if (pos != null) {
-                    LilyUtils.equipBestToolFor(pos);
-                    MiningManager.mine(pos);
-                }
-            }
+
             case "sprint" -> {
                 boolean sprinting = cmd.has("value") && cmd.get("value").getAsBoolean();
                 LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + (sprinting ? " sprint" : " unsprint"));

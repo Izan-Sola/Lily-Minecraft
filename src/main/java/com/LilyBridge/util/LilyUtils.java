@@ -113,6 +113,57 @@ public class LilyUtils {
 
         return m;
     }
+
+    /**
+     * Scans a circular area around Lily (radius in blocks, horizontal) within
+     * a vertical band relative to her position — heightBelowFeet blocks below
+     * her feet up through heightAboveHead blocks above her head — for any
+     * block registered in {@link #BLOCKS_OF_INTEREST}. Returns up to
+     * {@code limit} hits, nearest first.
+     */
+    public static JsonArray scanNearbyBlocksOfInterest(
+            ServerPlayer lily, int radius, int heightAboveHead, int heightBelowFeet, int limit) {
+
+        ServerLevel level = (ServerLevel) lily.level();
+        BlockPos feet = lily.blockPosition();
+
+        int minY = feet.getY() - heightBelowFeet;
+        int maxY = feet.getY() + 1 + heightAboveHead; // +1 accounts for the head block
+
+        List<JsonObject> hits = new ArrayList<>();
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if (dx * dx + dz * dz > radius * radius) continue; // circular scan, not square
+
+                for (int y = minY; y <= maxY; y++) {
+                    BlockPos pos = new BlockPos(feet.getX() + dx, y, feet.getZ() + dz);
+
+                    String id = level.getBlockState(pos).getBlockHolder()
+                            .unwrapKey().map(k -> k.location().toString()).orElse("");
+
+                    String category = BLOCKS_OF_INTEREST.get(id);
+                    if (category == null) continue;
+
+                    JsonObject o = new JsonObject();
+                    o.addProperty("block", id.replace("minecraft:", ""));
+                    o.addProperty("category", category);
+                    o.addProperty("x", pos.getX());
+                    o.addProperty("y", pos.getY());
+                    o.addProperty("z", pos.getZ());
+                    hits.add(o);
+                }
+            }
+        }
+
+        hits.sort(Comparator.comparingDouble(o -> feet.distSqr(
+                new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()))));
+
+        JsonArray arr = new JsonArray();
+        for (int i = 0; i < Math.min(limit, hits.size()); i++) arr.add(hits.get(i));
+        return arr;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
 // ENVIRONMENT INFO — biome, time of day, weather, underground check.
 // Bundled into the environment_scan payload alongside entities/blocks/inventory.
@@ -333,55 +384,6 @@ public class LilyUtils {
         return arr;
     }
 
-    /**
-     * Scans a circular area around Lily (radius in blocks, horizontal) within
-     * a vertical band relative to her position — heightBelowFeet blocks below
-     * her feet up through heightAboveHead blocks above her head — for any
-     * block registered in {@link #BLOCKS_OF_INTEREST}. Returns up to
-     * {@code limit} hits, nearest first.
-     */
-    public static JsonArray scanNearbyBlocksOfInterest(
-            ServerPlayer lily, int radius, int heightAboveHead, int heightBelowFeet, int limit) {
-
-        ServerLevel level = (ServerLevel) lily.level();
-        BlockPos feet = lily.blockPosition();
-
-        int minY = feet.getY() - heightBelowFeet;
-        int maxY = feet.getY() + 1 + heightAboveHead; // +1 accounts for the head block
-
-        List<JsonObject> hits = new ArrayList<>();
-
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                if (dx * dx + dz * dz > radius * radius) continue; // circular scan, not square
-
-                for (int y = minY; y <= maxY; y++) {
-                    BlockPos pos = new BlockPos(feet.getX() + dx, y, feet.getZ() + dz);
-
-                    String id = level.getBlockState(pos).getBlockHolder()
-                            .unwrapKey().map(k -> k.location().toString()).orElse("");
-
-                    String category = BLOCKS_OF_INTEREST.get(id);
-                    if (category == null) continue;
-
-                    JsonObject o = new JsonObject();
-                    o.addProperty("block", id.replace("minecraft:", ""));
-                    o.addProperty("category", category);
-                    o.addProperty("x", pos.getX());
-                    o.addProperty("y", pos.getY());
-                    o.addProperty("z", pos.getZ());
-                    hits.add(o);
-                }
-            }
-        }
-
-        hits.sort(Comparator.comparingDouble(o -> feet.distSqr(
-                new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()))));
-
-        JsonArray arr = new JsonArray();
-        for (int i = 0; i < Math.min(limit, hits.size()); i++) arr.add(hits.get(i));
-        return arr;
-    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // SOURCE BLOCK SEARCH

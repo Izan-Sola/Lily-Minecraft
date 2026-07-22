@@ -173,7 +173,7 @@ public class LilyBridge {
 
         ServerPlayer lily = LilyUtils.getLilyServerPlayer();
         if (lily == null || lily.isSleeping()) return;
-        if (lily.distanceTo(player) > 4.0) return;
+        if (lily.distanceTo(player) > 6.0) return;
 
         BlockPos bed = LilyUtils.findNearestUnoccupiedBed(lily);
         if (bed == null) return; // no free bed nearby, don't force it

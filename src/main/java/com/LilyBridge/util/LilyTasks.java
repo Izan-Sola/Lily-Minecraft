@@ -186,30 +186,13 @@ public class LilyTasks {
         }
     }
 
-    /**
-     * Rotates Lily to face a world point by computing yaw/pitch and issuing
-     * the fake-player "look" command.
-     *
-     * VERIFY THIS COMMAND SYNTAX against your fake-player mod before relying
-     * on it — this is written assuming Carpet-style
-     * `player <name> look <yaw> <pitch>`, matching the style of your other
-     * commands (move/jump/use/hotbar all take this "player <name> <verb> ..."
-     * shape). If your mod's actual "look" subcommand takes a different form
-     * (e.g. "look at <x> <y> <z>"), this is the one line to change.
-     */
+
     private static void faceTarget(ServerPlayer lily, double tx, double ty, double tz) {
-        double dx = tx - lily.getX();
-        double dy = ty - (lily.getY() + lily.getEyeHeight());
-        double dz = tz - lily.getZ();
-
-        double horizDist = Math.sqrt(dx * dx + dz * dz);
-        double yaw = Math.toDegrees(Math.atan2(-dx, dz));
-        double pitch = Math.toDegrees(-Math.atan2(dy, horizDist));
-
-        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " look "
-                + String.format("%.1f", yaw) + " " + String.format("%.1f", pitch));
+        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " look at "
+                + String.format("%.2f", tx) + " "
+                + String.format("%.2f", ty) + " "
+                + String.format("%.2f", tz));
     }
-
     // =========================================================================
     // Tarea de salto — cada 10 ticks (0.5 s)
     // =========================================================================
