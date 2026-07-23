@@ -29,6 +29,9 @@ public class LilyTasks {
     private static volatile int     stuckTicks           = 0;
     private static final    int     STUCK_THRESHOLD      = 15; // iteraciones del target-task (~3 s)
 
+    private static final double DEFAULT_ARRIVAL_DISTANCE = 1.0;
+    private static volatile double arrivalDistance = DEFAULT_ARRIVAL_DISTANCE;
+
     // ---------- Tareas Bukkit ----------
     private static BukkitTask movementJumpTask   = null;
     private static BukkitTask movementSafetyTask = null;
@@ -58,11 +61,45 @@ public class LilyTasks {
         isMoving = true;
         startMovementJumpTask();
         startMovementSafetyTask();
+        // Same reasoning as the target-following task: clear any previously-held
+        // movement input before committing to the new one, since Carpet stacks
+        // rather than replaces them.
+        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + direction);
     }
 
     /** Mueve hacia unas coordenadas mundo (X, Z). */
+    private static volatile Runnable onArriveCallback = null;
+
     public static void startMoveTo(double x, double z) {
+        startMoveTo(x, z, DEFAULT_ARRIVAL_DISTANCE, null);
+    }
+
+    /** Same as startMoveTo(x, z), but invokes onArrive once she's actually
+     *  stopped near the target — used by MiningManager so attack never starts
+     *  until movement has fully settled. */
+    public static void startMoveTo(double x, double z, Runnable onArrive) {
+        startMoveTo(x, z, DEFAULT_ARRIVAL_DISTANCE, onArrive);
+    }
+
+    /**
+     * Same as startMoveTo(x, z, onArrive), but lets the caller say how close
+     * counts as "arrived".
+     *
+     * ROOT CAUSE FIX: this used to be hardcoded to 1.0 for every caller. That's
+     * fine for a normal walk-to-a-point, but MiningManager walks toward the
+     * CENTER of the block she's about to break — a solid block, which she can
+     * never physically stand inside. From an adjacent tile the center-to-center
+     * distance is already ~1.0, so depending on the exact angle of approach
+     * distToGoal could hover just above that cutoff forever. The pathfinder
+     * keeps correctly nudging her along the block's face, arrival never fires,
+     * and after APPROACH_TIMEOUT_TICKS MiningManager gives up — which looked
+     * like her suddenly locking onto one direction and getting stuck near the
+     * block. Callers that actually need to interact with something (mining,
+     * within reach) should pass their real interaction range instead of relying
+     * on the default.
+     */
+    public static void startMoveTo(double x, double z, double arriveDistance, Runnable onArrive) {
         stopMovementJumpTask();
         stopMovementSafetyTask();
         currentMoveDirection   = null;
@@ -70,25 +107,27 @@ public class LilyTasks {
 
         targetMoveX = x;
         targetMoveZ = z;
+        arrivalDistance = arriveDistance > 0 ? arriveDistance : DEFAULT_ARRIVAL_DISTANCE;
         stuckTicks  = 0;
         lastStuckX  = 0;
         lastStuckZ  = 0;
+        onArriveCallback = onArrive;
 
         startMovementTargetTask();
     }
-
-    /** Para todo movimiento y cancela todas las tareas. */
     public static void stopAllMovement() {
         stopMovementJumpTask();
         stopMovementSafetyTask();
         stopMovementTargetTask();
-        cancelApproachTask(); // a manual stop should also abort any in-progress approach
-        targetMoveX            = null;
-        targetMoveZ            = null;
-        currentMoveDirection   = null;
+        cancelApproachTask();
+        targetMoveX = null;
+        targetMoveZ = null;
+        currentMoveDirection = null;
         currentTargetDirection = null;
-        isMoving               = false;
-        stuckTicks             = 0;
+        isMoving = false;
+        stuckTicks = 0;
+        onArriveCallback = null;
+        arrivalDistance = DEFAULT_ARRIVAL_DISTANCE;
         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
     }
 
@@ -236,19 +275,13 @@ public class LilyTasks {
                     if (lily == null) return;
 
                     ServerLevel level = (ServerLevel) lily.level();
-                    Vec3 look  = lily.getLookAngle();
                     double x   = lily.getX();
                     double y   = lily.getY();
                     double z   = lily.getZ();
 
-                    double nx, nz;
-                    switch (currentMoveDirection) {
-                        case "forward" -> { nx = x + look.x; nz = z + look.z; }
-                        case "back"    -> { nx = x - look.x; nz = z - look.z; }
-                        case "left"    -> { nx = x - look.z; nz = z + look.x; }
-                        case "right"   -> { nx = x + look.z; nz = z - look.x; }
-                        default        -> { return; }
-                    }
+                    Vec3 dir = travelDirectionVector(lily, currentMoveDirection);
+                    double nx = x + dir.x;
+                    double nz = z + dir.z;
 
                     BlockPos nextFeet = BlockPos.containing(nx, y, nz);
 
@@ -260,6 +293,10 @@ public class LilyTasks {
                         String newDir = oppositeDirection(currentMoveDirection);
                         LilyBridge.LOGGER.info("[SAFETY] Peligro al frente, invirtiendo {} -> {}", currentMoveDirection, newDir);
                         currentMoveDirection = newDir;
+                        // Carpet's "move <dir>" sets an input flag, it doesn't replace
+                        // whichever one is already held — switching direction without
+                        // stopping first leaves both held at once. Clear before reversing.
+                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
                         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + newDir);
                     }
                 },
@@ -293,12 +330,14 @@ public class LilyTasks {
 
                     double distToGoal = Math.hypot(targetMoveX - lily.getX(), targetMoveZ - lily.getZ());
 
-                    if (distToGoal < 1.0) {
+                    if (distToGoal < arrivalDistance) {
                         LilyBridge.LOGGER.info("[TARGET] Objetivo alcanzado ({}, {})", targetMoveX, targetMoveZ);
+                        Runnable cb = onArriveCallback;
+                        onArriveCallback = null;
                         stopAllMovement();
+                        if (cb != null) cb.run();
                         return;
                     }
-
                     double movedSinceLastCheck = Math.hypot(lily.getX() - lastStuckX, lily.getZ() - lastStuckZ);
                     if (movedSinceLastCheck < 0.5) {
                         stuckTicks++;
@@ -327,6 +366,15 @@ public class LilyTasks {
                                 newDir, String.format("%.1f", distToGoal));
                         currentTargetDirection = newDir;
                         currentMoveDirection   = newDir;
+                        // BUG FIX: "move <dir>" sets a movement input flag rather than
+                        // replacing one — it does NOT clear whatever direction was
+                        // already held. Every time the pathfinder picked a new direction
+                        // (e.g. "forward" -> "left" to go around something), that input
+                        // just stacked on top of the old one instead of overriding it, so
+                        // she kept drifting along a blend dominated by the very first
+                        // direction ever issued instead of actually turning toward the
+                        // target. Always stop before committing to a new direction.
+                        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " stop");
                         LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " move " + newDir);
                     }
 
@@ -353,11 +401,18 @@ public class LilyTasks {
         ServerLevel level  = (ServerLevel) lily.level();
         BlockPos    center = lily.blockPosition();
 
-        Vec3 look = lily.getLookAngle();
+        // BUG FIX: this used to check blocks aligned with lily.getLookAngle(),
+        // which is only the same as her direction of travel when she's moving
+        // "forward". Any time she's moving back/left/right relative to where
+        // she's facing (routine during mining — see MiningManager, she faces
+        // whichever block she just broke, not the one she's walking to next),
+        // this was checking for obstacles on the wrong side of her entirely,
+        // so a real wall in her actual path never triggered a jump.
+        Vec3 dir = travelDirectionVector(lily, currentMoveDirection);
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 if (dx == 0 && dz == 0) continue;
-                double dot = dx * look.x + dz * look.z;
+                double dot = dx * dir.x + dz * dir.z;
                 if (dot <= 0) continue;
 
                 BlockPos pos = center.offset(dx, 0, dz);
@@ -367,6 +422,23 @@ public class LilyTasks {
             }
         }
         return false;
+    }
+
+    /**
+     * World-space XZ vector for whichever direction she's actually walking,
+     * relative to her current look angle. "Forward" isn't always the same
+     * as her direction of travel — see shouldJump() above.
+     */
+    private static Vec3 travelDirectionVector(ServerPlayer lily, String direction) {
+        Vec3 look = lily.getLookAngle();
+        if (direction == null) return look;
+        return switch (direction) {
+            case "forward" -> look;
+            case "back"    -> new Vec3(-look.x, 0, -look.z);
+            case "left"    -> new Vec3(-look.z, 0, look.x);
+            case "right"   -> new Vec3(look.z, 0, -look.x);
+            default        -> look;
+        };
     }
 
     private static String oppositeDirection(String dir) {

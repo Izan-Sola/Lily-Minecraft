@@ -157,8 +157,7 @@ public class LilyBridge {
         if (lily == null || lily.isPassenger()) return;
         if (boat.getPassengers().size() > 1) return; // no free seat
         if (lily.distanceTo(player) > 4.0) return;
-
-        LilyTasks.approachAndUse(lily, boat);
+        LilyUtils.runCommand("player " + LilyBridge.BOT_NAME + " mount ");
     }
 
     @SubscribeEvent

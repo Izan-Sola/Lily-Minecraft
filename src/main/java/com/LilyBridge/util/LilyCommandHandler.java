@@ -140,20 +140,34 @@ public class LilyCommandHandler {
             }
 
             case "break" -> {
-                BlockPos pos = new BlockPos(cmd.get("x").getAsInt(), cmd.get("y").getAsInt(), cmd.get("z").getAsInt());
-                LilyUtils.equipBestToolFor(pos);
-                MiningManager.mine(pos);
-            }
-            case "break_closest_generic" -> {
-                String blockName = cmd.get("block").getAsString();
-                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : 3;
                 ServerPlayer lily = LilyUtils.getLilyServerPlayer();
-                BlockPos pos = BlockFinder.findClosestBlock(lily, blockName, radius);
-                if (pos != null) {
-                    LilyUtils.equipBestToolFor(pos);
-                    MiningManager.mine(pos);
+                ServerLevel level = (ServerLevel) lily.level();
+                int amount = cmd.has("amount") ? Math.max(1, cmd.get("amount").getAsInt()) : 1;
+
+                BlockPos pos;
+                String name;
+                if (cmd.has("x") && cmd.has("y") && cmd.has("z")) {
+                    pos = new BlockPos(cmd.get("x").getAsInt(), cmd.get("y").getAsInt(), cmd.get("z").getAsInt());
+                    name = level.getBlockState(pos).getBlockHolder()
+                            .unwrapKey().map(k -> k.location().getPath()).orElse(null);
+                } else {
+                    name = cmd.get("block").getAsString();
+                    int radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : 3;
+                    pos = BlockFinder.findClosestBlock(lily, name, radius);
                 }
+
+                if (pos != null) MiningManager.mine(pos, name, amount);
             }
+//            case "break_closest_generic" -> {
+//                String blockName = cmd.get("block").getAsString();
+//                Integer radius = cmd.has("radius") ? cmd.get("radius").getAsInt() : 3;
+//                ServerPlayer lily = LilyUtils.getLilyServerPlayer();
+//                BlockPos pos = BlockFinder.findClosestBlock(lily, blockName, radius);
+//                if (pos != null) {
+//                    LilyUtils.equipBestToolFor(pos);
+//                    MiningManager.mine(pos);
+//                }
+//            }
             case "cancel_break" -> MiningManager.cancel();
 
             case "use" -> {

@@ -4,6 +4,7 @@ import com.LilyBridge.LilyBridge;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -70,92 +71,55 @@ public class LilyUtils {
             "minecraft:cobblestone", "minecraft:stone", "minecraft:gravel"
     );
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // BLOCKS OF INTEREST — full registry ID → friendly category.
-    // Add/remove entries here to change what the environment scan reports;
-    // nothing else needs to change.
-    // ─────────────────────────────────────────────────────────────────────────
-    private static final Map<String, String> BLOCKS_OF_INTEREST = buildBlocksOfInterest();
-
-    private static Map<String, String> buildBlocksOfInterest() {
-        Map<String, String> m = new HashMap<>();
-
-        // Wood (logs/stems)
-        for (String log : new String[]{
-                "oak_log", "birch_log", "spruce_log", "jungle_log", "acacia_log",
-                "dark_oak_log", "mangrove_log", "cherry_log", "crimson_stem", "warped_stem"
-        }) {
-            m.put("minecraft:" + log, "wood");
-        }
-
-        // Ores (overworld + deepslate variants)
-        for (String ore : new String[]{
-                "coal_ore", "deepslate_coal_ore",
-                "iron_ore", "deepslate_iron_ore",
-                "copper_ore", "deepslate_copper_ore",
-                "gold_ore", "deepslate_gold_ore",
-                "redstone_ore", "deepslate_redstone_ore",
-                "lapis_ore", "deepslate_lapis_ore",
-                "diamond_ore", "deepslate_diamond_ore",
-                "emerald_ore", "deepslate_emerald_ore",
-                "ancient_debris"
-        }) {
-            m.put("minecraft:" + ore, "ore");
-        }
-
-        // Food sources
-        m.put("minecraft:sweet_berry_bush", "food");
-        m.put("minecraft:melon",            "food");
-        m.put("minecraft:pumpkin",          "food");
-        m.put("minecraft:wheat",            "food");
-        m.put("minecraft:carrots",          "food");
-        m.put("minecraft:potatoes",         "food");
-
-        return m;
-    }
-
     /**
-     * Scans a circular area around Lily (radius in blocks, horizontal) within
-     * a vertical band relative to her position — heightBelowFeet blocks below
-     * her feet up through heightAboveHead blocks above her head — for any
-     * block registered in {@link #BLOCKS_OF_INTEREST}. Returns up to
-     * {@code limit} hits, nearest first.
+     * Scans a circular area around Lily for the closest ACCESSIBLE block of
+     * every distinct block type nearby — one entry per type, nearest first,
+     * up to `limit` types. "Accessible" = solid, has at least one exposed
+     * (non-solid) face so she can actually reach/swing at it, and isn't the
+     * block directly beneath her feet.
      */
     public static JsonArray scanNearbyBlocksOfInterest(
             ServerPlayer lily, int radius, int heightAboveHead, int heightBelowFeet, int limit) {
-
         ServerLevel level = (ServerLevel) lily.level();
         BlockPos feet = lily.blockPosition();
-
+        BlockPos below = feet.below();
         int minY = feet.getY() - heightBelowFeet;
-        int maxY = feet.getY() + 1 + heightAboveHead; // +1 accounts for the head block
+        int maxY = feet.getY() + 1 + heightAboveHead;
 
-        List<JsonObject> hits = new ArrayList<>();
+        Map<String, JsonObject> closest = new HashMap<>();
+        Map<String, Double> closestDist = new HashMap<>();
 
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                if (dx * dx + dz * dz > radius * radius) continue; // circular scan, not square
-
+                if (dx * dx + dz * dz > radius * radius) continue;
                 for (int y = minY; y <= maxY; y++) {
                     BlockPos pos = new BlockPos(feet.getX() + dx, y, feet.getZ() + dz);
+                    if (pos.equals(below)) continue; // can't break what she's standing on
 
-                    String id = level.getBlockState(pos).getBlockHolder()
-                            .unwrapKey().map(k -> k.location().toString()).orElse("");
+                    BlockState state = level.getBlockState(pos);
+                    if (state.isAir() || !state.getFluidState().isEmpty()) continue;
+                    if (!isAccessible(level, pos)) continue;
 
-                    String category = BLOCKS_OF_INTEREST.get(id);
-                    if (category == null) continue;
+                    String id = state.getBlockHolder().unwrapKey()
+                            .map(k -> k.location().getPath()).orElse(null);
+                    if (id == null) continue;
+
+                    double distSq = feet.distSqr(pos);
+                    Double best = closestDist.get(id);
+                    if (best != null && distSq >= best) continue;
 
                     JsonObject o = new JsonObject();
-                    o.addProperty("block", id.replace("minecraft:", ""));
-                    o.addProperty("category", category);
+                    o.addProperty("block", id);
                     o.addProperty("x", pos.getX());
                     o.addProperty("y", pos.getY());
                     o.addProperty("z", pos.getZ());
-                    hits.add(o);
+                    closest.put(id, o);
+                    closestDist.put(id, distSq);
                 }
             }
         }
 
+        List<JsonObject> hits = new ArrayList<>(closest.values());
         hits.sort(Comparator.comparingDouble(o -> feet.distSqr(
                 new BlockPos(o.get("x").getAsInt(), o.get("y").getAsInt(), o.get("z").getAsInt()))));
 
@@ -164,8 +128,18 @@ public class LilyUtils {
         return arr;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-// ENVIRONMENT INFO — biome, time of day, weather, underground check.
+    /** True if `pos` has at least one non-solid neighbor — i.e. reachable,
+     *  not fully encased in stone. */
+    private static boolean isAccessible(ServerLevel level, BlockPos pos) {
+        for (Direction dir : Direction.values()) {
+            BlockState neighbor = level.getBlockState(pos.relative(dir));
+            if (neighbor.isAir() || !neighbor.getFluidState().isEmpty() || !neighbor.canOcclude()) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // ENVIRONMENT INFO — biome, time of day, weather, underground check.
 // Bundled into the environment_scan payload alongside entities/blocks/inventory.
 // ─────────────────────────────────────────────────────────────────────────
     public static JsonObject getEnvironmentInfo(ServerPlayer lily) {
@@ -226,7 +200,7 @@ public class LilyUtils {
         double nx = x, nz = z;
         switch (direction) {
             case "forward" -> { nx = x + look.x; nz = z + look.z; }
-            case "back"    -> { nx = x - look.x; nz = z - look.x; }
+            case "back"    -> { nx = x - look.x; nz = z - look.z; }
             case "left"    -> { nx = x - look.z; nz = z + look.x; }
             case "right"   -> { nx = x + look.z; nz = z - look.x; }
         }
